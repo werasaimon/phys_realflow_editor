@@ -22,6 +22,7 @@
 #include <QHBoxLayout>
 #include <QHeaderView>
 #include <QLabel>
+#include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QPointer>
@@ -34,6 +35,7 @@
 #include <QTableWidget>
 #include <QTimer>
 #include <QToolBar>
+#include <QToolButton>
 #include <QVBoxLayout>
 
 #include <algorithm>
@@ -72,7 +74,6 @@ MainWindow::MainWindow() {
     });
     connect(view_, &Viewport::grabStarted, this, [this](int body, Vector3 p) {
         ctrl_->post([body, p](Simulation& s) { s.rigid.grab(body, p); });
-        if (builder_) builder_->selectBody(body); // a click on a body selects it in the scene builder
     });
     connect(view_, &Viewport::particleGrabStarted, this, [this](Vector3 p) {
         ctrl_->post([p](Simulation& s) { s.particles.grab(p); });
@@ -94,8 +95,16 @@ MainWindow::MainWindow() {
     buildParameterDock();
     buildVisualDock();
     buildResultsDock();
+    // The right column (scene list, inspector) runs the full height, like the panels of a 3D package.
+    setCorner(Qt::BottomRightCorner, Qt::RightDockWidgetArea);
+    setCorner(Qt::TopRightCorner, Qt::RightDockWidgetArea);
     buildSceneBuilderDock();
+    connectSceneBuilder();
+    buildLayoutActions();
+    buildMainToolbar();
     buildSceneMenu();
+    setExpertMode(false);   // a beginner's screen: the builder and a big 3D view
+    setGraphsVisible(false);
 
     status_ = new QLabel;
     statusBar()->addPermanentWidget(status_, 1);
@@ -115,27 +124,22 @@ MainWindow::~MainWindow() {
 // Toolbar & menu
 // ---------------------------------------------------------------------------
 void MainWindow::buildActions() {
-    auto* tb = addToolBar("Управление");
-    tb->setObjectName("mainToolbar");
-    tb->setMovable(false);
-    tb->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    tb->setIconSize(QSize(18, 18));
-
-    playAct_ = new QAction(style()->standardIcon(QStyle::SP_MediaPlay), "Старт", this);
+    playAct_ = new QAction(controlIcon(ControlIcon::Play, 48), "Пуск", this);
     playAct_->setShortcut(Qt::Key_Space);
     playAct_->setCheckable(true);
     connect(playAct_, &QAction::triggered, this, &MainWindow::togglePlay);
 
-    auto* stepAct = new QAction(style()->standardIcon(QStyle::SP_MediaSkipForward), "Шаг", this);
-    stepAct->setShortcut(Qt::Key_S);
-    connect(stepAct, &QAction::triggered, this, [this] { ctrl_->requestStep(); });
+    stepAct_ = new QAction(controlIcon(ControlIcon::Step, 48), "Шаг", this);
+    stepAct_->setShortcut(Qt::Key_S);
+    connect(stepAct_, &QAction::triggered, this, [this] { ctrl_->requestStep(); });
 
-    auto* resetAct = new QAction(style()->standardIcon(QStyle::SP_BrowserReload), "Сброс", this);
-    resetAct->setShortcut(Qt::Key_R);
-    connect(resetAct, &QAction::triggered, this, [this] { ctrl_->post([](Simulation& s) { s.reset(); }); });
+    resetAct_ = new QAction(controlIcon(ControlIcon::Reset, 48), "Сначала", this);
+    resetAct_->setShortcut(Qt::Key_R);
+    resetAct_->setToolTip("Вернуть сцену к началу (R)");
+    connect(resetAct_, &QAction::triggered, this, [this] { ctrl_->post([](Simulation& s) { s.reset(); }); });
 
     auto* importAct = new QAction(style()->standardIcon(QStyle::SP_DialogOpenButton), "Импорт модели…", this);
-    importAct->setShortcut(QKeySequence::Open);
+    importAct->setShortcut(QKeySequence("Ctrl+I")); // Ctrl+O opens a scene (menu "Сцена")
     connect(importAct, &QAction::triggered, this, &MainWindow::importMesh);
     auto* shotAct = new QAction("Скриншот…", this);
     shotAct->setShortcut(QKeySequence("Ctrl+P"));
@@ -147,28 +151,8 @@ void MainWindow::buildActions() {
     loadsAct->setToolTip("Cp, Cf и сила на каждом треугольнике тела в аэротрубе");
     connect(loadsAct, &QAction::triggered, this, &MainWindow::exportSurfaceLoads);
 
-    presetCombo_ = new QComboBox;
-    presetCombo_->setMinimumWidth(320);
-    // The sample scenes (samples/Samples.h), grouped by category with a separator between groups.
-    std::string prevCategory = samples().empty() ? "" : samples()[0].category;
-    for (const SampleEntry& e : samples()) {
-        if (e.category != prevCategory) {
-            presetCombo_->insertSeparator(presetCombo_->count());
-            prevCategory = e.category;
-        }
-        presetCombo_->addItem(QString::fromStdString(e.name), int(e.id));
-    }
-    connect(presetCombo_, &QComboBox::activated, this, [this](int idx) {
-        int p = presetCombo_->itemData(idx).toInt();
-        ctrl_->post([p](Simulation& s) { loadSample(s, p); });
-    });
+    buildSamplesMenu();
 
-    tb->addWidget(new QLabel("  Сцена "));
-    tb->addWidget(presetCombo_);
-    tb->addSeparator();
-    tb->addAction(playAct_);
-    tb->addAction(stepAct);
-    tb->addAction(resetAct);
 
     auto* file = menuBar()->addMenu("&Файл");
     file->addAction(importAct);
@@ -180,8 +164,8 @@ void MainWindow::buildActions() {
 
     auto* sim = menuBar()->addMenu("&Симуляция");
     sim->addAction(playAct_);
-    sim->addAction(stepAct);
-    sim->addAction(resetAct);
+    sim->addAction(stepAct_);
+    sim->addAction(resetAct_);
     auto* rt = sim->addAction("Не быстрее реального времени");
     rt->setCheckable(true);
     rt->setChecked(true);
@@ -197,12 +181,60 @@ void MainWindow::buildActions() {
     help->addAction("О программе", this, &MainWindow::showAbout);
 }
 
+// The ready-made scenes of the SDK (samples/Samples.h), one submenu per category; the running one
+// is ticked.
+void MainWindow::buildSamplesMenu() {
+    samplesMenu_ = new QMenu("Готовые сцены", this);
+    samplesGroup_ = new QActionGroup(this);
+    samplesGroup_->setExclusionPolicy(QActionGroup::ExclusionPolicy::ExclusiveOptional);
+    QMenu* category = nullptr;
+    std::string categoryName;
+    for (const SampleEntry& e : samples()) {
+        if (!category || e.category != categoryName) {
+            categoryName = e.category;
+            category = samplesMenu_->addMenu(QString::fromStdString(categoryName));
+        }
+        QAction* a = category->addAction(QString::fromStdString(e.name));
+        a->setCheckable(true);
+        samplesGroup_->addAction(a);
+        const int p = int(e.id);
+        connect(a, &QAction::triggered, this, [this, p] { ctrl_->post([p](Simulation& s) { loadSample(s, p); }); });
+    }
+}
+
+void MainWindow::buildLayoutActions() {
+    expertAct_ = new QAction("Эксперт", this);
+    expertAct_->setCheckable(true);
+    expertAct_->setToolTip("Все параметры решателей, визуализация и кисть — для тех, кто знает, что крутит");
+    connect(expertAct_, &QAction::toggled, this, &MainWindow::setExpertMode);
+    graphsAct_ = new QAction("Графики", this);
+    graphsAct_->setCheckable(true);
+    graphsAct_->setShortcut(QKeySequence("Ctrl+G"));
+    graphsAct_->setToolTip("Показания и графики внизу (Ctrl+G); без них главные числа — в строке состояния");
+    connect(graphsAct_, &QAction::toggled, this, &MainWindow::setGraphsVisible);
+    QMenu* viewMenu = menuBar()->findChild<QMenu*>("viewMenu");
+    viewMenu->addSeparator();
+    viewMenu->addAction(graphsAct_);
+    viewMenu->addAction(expertAct_);
+}
+
+void MainWindow::setExpertMode(bool on) {
+    for (const char* name : {"paramsDock", "visDock"})
+        if (auto* dock = findChild<QDockWidget*>(name)) dock->setVisible(on);
+    expertAct_->setChecked(on);
+}
+
+void MainWindow::setGraphsVisible(bool on) {
+    if (auto* dock = findChild<QDockWidget*>("resultsDock")) dock->setVisible(on);
+    graphsAct_->setChecked(on);
+}
+
 void MainWindow::togglePlay() {
     bool on = !ctrl_->isRunning();
     ctrl_->setRunning(on);
     playAct_->setChecked(on);
-    playAct_->setText(on ? "Пауза" : "Старт");
-    playAct_->setIcon(style()->standardIcon(on ? QStyle::SP_MediaPause : QStyle::SP_MediaPlay));
+    playAct_->setText(on ? "Пауза" : "Пуск");
+    playAct_->setIcon(controlIcon(on ? ControlIcon::Pause : ControlIcon::Play, 48));
 }
 
 // ---------------------------------------------------------------------------
@@ -660,18 +692,96 @@ void MainWindow::buildParameterDock() {
 // ---------------------------------------------------------------------------
 // Scene builder ("Конструктор"): shapes with roles, saved as *.rfscene
 // ---------------------------------------------------------------------------
+// Two panels on the right, like the outliner and the properties of a 3D package: the scene list
+// on top, the inspector of the selected thing below (the visualisation settings share its place
+// as a tab).
 void MainWindow::buildSceneBuilderDock() {
-    auto* dock = new QDockWidget("Конструктор", this);
-    dock->setObjectName("builderDock");
-    auto* scroll = new QScrollArea;
-    scroll->setWidgetResizable(true);
-    scroll->setFrameShape(QFrame::NoFrame);
-    builder_ = new SceneBuilder(ctrl_.get());
-    scroll->setWidget(builder_);
-    scroll->setMinimumWidth(360);
-    dock->setWidget(scroll);
-    addDockWidget(Qt::RightDockWidgetArea, dock);
-    menuBar()->findChild<QMenu*>("viewMenu")->addAction(dock->toggleViewAction());
+    builder_ = new SceneBuilder(ctrl_.get(), this);
+    auto makeDock = [this](const QString& title, const char* name, QWidget* content) {
+        auto* dock = new QDockWidget(title, this);
+        dock->setObjectName(name);
+        auto* scroll = new QScrollArea;
+        scroll->setWidgetResizable(true);
+        scroll->setFrameShape(QFrame::NoFrame);
+        scroll->setWidget(content);
+        scroll->setMinimumWidth(330);
+        dock->setWidget(scroll);
+        addDockWidget(Qt::RightDockWidgetArea, dock);
+        menuBar()->findChild<QMenu*>("viewMenu")->addAction(dock->toggleViewAction());
+        return dock;
+    };
+    QDockWidget* list = makeDock("Сцена", "sceneListDock", builder_->sceneListPanel());
+    QDockWidget* inspector = makeDock("Инспектор", "inspectorDock", builder_->inspectorPanel());
+    splitDockWidget(list, inspector, Qt::Vertical);
+    if (auto* vis = findChild<QDockWidget*>("visDock")) {
+        tabifyDockWidget(inspector, vis);
+        inspector->raise();
+    }
+    // The sizes apply once the window has its size: after the first layout.
+    QTimer::singleShot(0, this, [this, list, inspector] { resizeDocks({list, inspector}, {280, 560}, Qt::Vertical); });
+}
+
+void MainWindow::connectSceneBuilder() {
+    connect(builder_, &SceneBuilder::statusMessage, this, [this](const QString& text) { statusBar()->showMessage(text, 6000); });
+    connect(builder_, &SceneBuilder::wantsRunning, this, [this] {
+        if (!ctrl_->isRunning()) togglePlay();
+    });
+    connect(builder_, &SceneBuilder::highlightBodies, view_, &Viewport::setHighlightBodies);
+    connect(builder_, &SceneBuilder::frameRequested, this, [this](const rf::AABB& box) {
+        view_->setFocusBox(box);
+        view_->frameScene();
+    });
+    connect(builder_, &SceneBuilder::unpickableBodies, view_, &Viewport::setUnpickableBodies);
+    connect(view_, &Viewport::bodyClicked, builder_, &SceneBuilder::selectBody);
+    connect(view_, &Viewport::moveStarted, builder_, &SceneBuilder::moveStarted);
+    connect(view_, &Viewport::moveDragged, builder_, &SceneBuilder::moveDragged);
+    connect(view_, &Viewport::moveFinished, builder_, &SceneBuilder::moveFinished);
+}
+
+// The big bar on top: what you can create, then run / step / back to the start, then undo / redo,
+// and the ready-made scenes at the right end.
+void MainWindow::buildMainToolbar() {
+    auto* tb = new QToolBar("Создать", this);
+    tb->setObjectName("createBar");
+    tb->setMovable(false);
+    tb->setIconSize(QSize(48, 48));
+    tb->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+    addToolBar(Qt::TopToolBarArea, tb);
+    for (QAction* a : builder_->createActions()) tb->addAction(a);
+    tb->addSeparator();
+    tb->addAction(playAct_);
+    tb->addAction(stepAct_);
+    tb->addAction(resetAct_);
+    tb->addSeparator();
+    tb->addAction(builder_->undoAction());
+    tb->addAction(builder_->redoAction());
+    auto* spacer = new QWidget;
+    spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
+    tb->addWidget(spacer);
+    // Compact text buttons at the right end: the ready-made scenes, the graphs, the expert panels.
+    auto compact = [tb](QToolButton* b) {
+        b->setObjectName("compactButton");
+        b->setToolButtonStyle(Qt::ToolButtonTextOnly);
+        tb->addWidget(b);
+    };
+    auto* samplesButton = new QToolButton;
+    samplesButton->setText("Примеры ▾");
+    samplesButton->setToolTip("Готовые сцены SDK: вода, огонь, плазма, токамак, уроки…");
+    samplesButton->setMenu(samplesMenu_);
+    samplesButton->setPopupMode(QToolButton::InstantPopup);
+    compact(samplesButton);
+    for (QAction* a : {graphsAct_, expertAct_}) {
+        auto* b = new QToolButton;
+        b->setDefaultAction(a);
+        compact(b);
+    }
+}
+
+// The builder's first scene: the file given on the command line, else a floor. It asks to run.
+void MainWindow::startBuilder() {
+    QString error;
+    if (!startScene_.isEmpty() && !builder_->openFile(startScene_, error)) QMessageBox::warning(this, "Открыть сцену", error);
+    if (startScene_.isEmpty() || !error.isEmpty()) builder_->newScene();
 }
 
 // Where "Открыть…" starts: the editor's examples/ (next to the program when installed, else the
@@ -701,6 +811,8 @@ void MainWindow::buildSceneMenu() {
         QString error;
         if (!builder_->saveFile(path, error)) QMessageBox::warning(this, "Сохранить сцену", error);
     });
+    menu->addSeparator();
+    menu->addMenu(samplesMenu_);
     menu->addSeparator();
     // TODO: the node view - entities and roles as boxes wired together (the next step of the builder).
     auto* graphView = menu->addAction("Граф ролей (скоро)");
@@ -930,11 +1042,19 @@ void MainWindow::updateInfo(const Snap& s) {
             if (!it) info_->setItem(r, c, it = new QTableWidgetItem);
             it->setText(QString::fromStdString(c == 0 ? s.info[r].first : s.info[r].second));
         }
-    status_->setText(QString("%1  ·  кадр %2  ·  t = %3 с  ·  %4")
+    // With the graphs folded away, the status bar carries the three main readings of the scene.
+    QString readings;
+    int shown = 0;
+    for (const auto& [name, value] : s.info) {
+        if (graphsAct_->isChecked() || shown == 3 || name == "Время") continue;
+        readings += QString("  ·  %1 %2").arg(QString::fromStdString(name), QString::fromStdString(value));
+        ++shown;
+    }
+    status_->setText(QString("%1  ·  кадр %2  ·  t = %3 с  ·  %4%5")
                          .arg(QString::fromStdString(s.sceneName))
                          .arg(s.frame)
                          .arg(s.time, 0, 'f', 3)
-                         .arg(ctrl_->isRunning() ? "идёт расчёт" : "пауза"));
+                         .arg(ctrl_->isRunning() ? "идёт расчёт" : "пауза", readings));
     updateSensors(s);
 }
 
@@ -955,6 +1075,8 @@ void MainWindow::updateSensors(const Snap& s) {
 }
 
 void MainWindow::onSnapshot(const std::shared_ptr<const Snap>& s) {
+    // A ready-made scene is framed whole again; the builder's scenes frame their objects.
+    if (s->sceneName != lastSceneName_ && s->sceneName.rfind(SceneBuilder::sceneName(), 0) != 0) view_->setFocusBox(rf::AABB());
     view_->setSnapshot(s);
 
     const bool sceneChanged = s->sceneName != lastSceneName_;
@@ -963,8 +1085,7 @@ void MainWindow::onSnapshot(const std::shared_ptr<const Snap>& s) {
         lastParamsVersion_ = s->paramsVersion;
         for (ParamForm* f : forms_) f->refresh(*s);
         updateModeVisibility(s->mode);
-        int idx = presetCombo_->findText(QString::fromStdString(s->sceneName));
-        if (idx >= 0) presetCombo_->setCurrentIndex(idx);
+        for (QAction* a : samplesGroup_->actions()) a->setChecked(a->text().toStdString() == s->sceneName);
     }
     if (sceneChanged) {
         plots_->setScene(s->sceneName); // drops the series, restores the scene's channel selection
@@ -981,10 +1102,12 @@ void MainWindow::onSnapshot(const std::shared_ptr<const Snap>& s) {
         updateInfo(*s);
     }
 
-    if (auto_.active && s->sceneName == samples()[auto_.preset].name && int(s->frame) >= auto_.frames && ++auto_.settle == 1) {
+    const bool wanted = auto_.preset < 0 ? s->sceneName.rfind(SceneBuilder::sceneName(), 0) == 0 // "Конструктор[: file]"
+                                         : s->sceneName == samples()[auto_.preset].name;
+    if (auto_.active && wanted && int(s->frame) >= auto_.frames && ++auto_.settle == 1) {
         ctrl_->setRunning(false);
         QTimer::singleShot(300, this, [this] {
-            if (!auto_.shot.isEmpty()) view_->grabFramebuffer().save(auto_.shot);
+            if (!auto_.shot.isEmpty()) (auto_.wholeWindow ? grab().toImage() : view_->grabFramebuffer()).save(auto_.shot);
             if (!auto_.csv.isEmpty()) plots_->writeCsv(auto_.csv);
             qApp->quit();
         });
@@ -992,8 +1115,9 @@ void MainWindow::onSnapshot(const std::shared_ptr<const Snap>& s) {
 }
 
 void MainWindow::runAutomation(int preset, int frames, const QString& shot, const QString& csv) {
-    preset = std::clamp(preset, 0, int(samples().size()) - 1);
-    ctrl_->post([preset](Simulation& s) { loadSample(s, preset); });
+    preset = std::clamp(preset, -1, int(samples().size()) - 1);
+    if (preset < 0) startBuilder();
+    else ctrl_->post([preset](Simulation& s) { loadSample(s, preset); });
     auto_.active = !shot.isEmpty() || !csv.isEmpty();
     if (!auto_.active) {
         if (!ctrl_->isRunning()) togglePlay(); // opened from the command line: start simulating

@@ -1,4 +1,6 @@
+#include "Icons.h"
 #include "MainWindow.h"
+#include "SelfTest.h"
 
 #include "core/Probe.h"
 
@@ -62,7 +64,26 @@ static void applyDarkTheme(QApplication& app) {
         "QToolButton:hover { background: #3a404b; }"
         "QToolButton:checked { background: #2d5c99; }"
         "QTableWidget { gridline-color: #333842; }"
-        "QHeaderView::section { background: #2c3038; padding: 4px; border: none; }");
+        "QHeaderView::section { background: #2c3038; padding: 4px; border: none; }"
+        // The scene builder and the big toolbar: airy, 8 px rhythm, readable contrast.
+        "QToolBar#createBar { spacing: 4px; padding: 6px 8px; background: #2a2e36; border-bottom: 1px solid #3a3f48; }"
+        "QToolBar#createBar QToolButton { padding: 4px 10px; border-radius: 8px; min-width: 64px; }"
+        "QToolBar#createBar QToolButton:hover { background: #394150; }"
+        "QToolBar#createBar QToolButton:pressed { background: #2d5c99; }"
+        "QToolBar#createBar QToolButton#compactButton { min-width: 0; padding: 6px 12px; margin-left: 4px; border: 1px solid #3a3f48; }"
+        "QToolBar#createBar QToolButton#compactButton:checked { background: #24466f; border: 1px solid #4096ff; }"
+        "QToolBar#createBar QToolButton#compactButton::menu-indicator { image: none; }"
+        "QWidget#builderPanel QLabel#sectionTitle { color: #8fc1ff; margin-top: 6px; }"
+        "QWidget#builderPanel QLabel#headerName { font-size: 15px; font-weight: 600; }"
+        "QWidget#builderPanel QLabel#emptyHint { color: #8b93a2; padding: 24px; }"
+        "QWidget#builderPanel QLabel#roleRowLabel { color: #8b93a2; }"
+        "QWidget#builderPanel QToolButton#roleButton { padding: 4px 2px; border: 1px solid #3a3f48; border-radius: 8px; background: #2c3038; }"
+        "QWidget#builderPanel QToolButton#roleButton:hover { background: #363c47; }"
+        "QWidget#builderPanel QToolButton#roleButton:checked { background: #24466f; border: 1px solid #4096ff; }"
+        "QWidget#builderPanel QPushButton#sectionHeader { border: none; text-align: left; padding: 5px 4px; font-weight: 600; }"
+        "QWidget#builderPanel QPushButton#sectionHeader:hover { background: #333842; border-radius: 4px; }"
+        "QWidget#builderPanel QTreeWidget { border: 1px solid #3a3f48; border-radius: 6px; padding: 2px; }"
+        "QWidget#builderPanel QTreeWidget::item { padding: 3px 0; }");
 }
 
 // Software rendering for PCs without a usable GPU / OpenGL driver: Qt's Mesa llvmpipe
@@ -99,18 +120,28 @@ int main(int argc, char** argv) {
     QCommandLineOption csvOpt("csv", "Save the plotted time series as CSV and quit.", "file");
     QCommandLineOption sizeOpt("size", "Window size WxH.", "size", "1600x950");
     QCommandLineOption softOpt("software-gl", "Render on the CPU (Mesa llvmpipe) - for PCs without a usable GPU.");
-    cli.addOptions({presetOpt, framesOpt, shotOpt, csvOpt, sizeOpt, softOpt});
+    QCommandLineOption iconsOpt("dump-icons", "Write every icon of the editor as a PNG into the directory and quit.", "dir");
+    QCommandLineOption windowOpt("window", "The screenshot shows the whole window, panels too.");
+    QCommandLineOption sceneOpt("scene", "Open a scene file (*.rfscene) in the scene builder.", "file");
+    QCommandLineOption selfTestOpt("self-test", "Press the scene builder's buttons, check the results, quit (exit code = failures).");
+    cli.addOptions({presetOpt, framesOpt, shotOpt, csvOpt, sizeOpt, softOpt, iconsOpt, windowOpt, sceneOpt, selfTestOpt});
     cli.process(app);
+    if (cli.isSet(iconsOpt)) return dumpIcons(cli.value(iconsOpt)) > 0 ? 0 : 1;
 
     MainWindow w;
     QStringList wh = cli.value(sizeOpt).split('x');
     w.resize(wh.value(0).toInt() > 0 ? wh.value(0).toInt() : 1600, wh.value(1).toInt() > 0 ? wh.value(1).toInt() : 950);
     w.show();
+    if (cli.isSet(selfTestOpt)) return runBuilderSelfTest(w);
+    // Without --preset the editor opens on the scene builder: a floor, ready for the first shape.
+    const int preset = cli.isSet(presetOpt) ? cli.value(presetOpt).toInt() : -1;
+    w.setScreenshotWholeWindow(cli.isSet(windowOpt));
+    if (cli.isSet(sceneOpt)) w.setStartScene(cli.value(sceneOpt));
     if (cli.isSet(shotOpt) || cli.isSet(csvOpt))
-        w.runAutomation(cli.value(presetOpt).toInt(), cli.value(framesOpt).toInt(), cli.value(shotOpt), cli.value(csvOpt));
-    else if (cli.isSet(presetOpt)) {
-        int p = cli.value(presetOpt).toInt();
-        w.runAutomation(p, 0, {}, {});
-    }
+        w.runAutomation(preset, cli.value(framesOpt).toInt(), cli.value(shotOpt), cli.value(csvOpt));
+    else if (preset >= 0)
+        w.runAutomation(preset, 0, {}, {});
+    else
+        w.startBuilder();
     return app.exec();
 }

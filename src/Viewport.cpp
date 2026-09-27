@@ -3,6 +3,7 @@
 
 #include <QColor>
 #include <QDateTime>
+#include <QGuiApplication>
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QPainter>
@@ -226,6 +227,11 @@ void Viewport::resizeGL(int, int) {}
 // Camera & interaction
 // ---------------------------------------------------------------------------
 void Viewport::frameScene() {
+    if (focusBox_.valid()) {
+        camera_.frame(focusBox_, 40.0f, 24.0f);
+        update();
+        return;
+    }
     if (!snap_ || !snap_->domain.valid()) return;
     // Voxel/vector scenes look straight at the Z slice; others use a 3/4 view.
     if (snap_->vis.gridDisplay > 0 || snap_->vis.vectorDisplay > 0) camera_.frame(snap_->domain, 90.0f, 12.0f);
@@ -234,6 +240,12 @@ void Viewport::frameScene() {
 }
 
 ViewportTool& Viewport::toolFor(Qt::MouseButton button, const QPointF& pos) {
+    // Shift + LMB on a body moves its thing (the scene builder), whatever else the scene does.
+    if (button == Qt::LeftButton && (QGuiApplication::keyboardModifiers() & Qt::ShiftModifier)) {
+        int body;
+        Vector3 hit;
+        if (pickAnyBody(camera_.screenRay(pos, size()), body, hit)) return moveTool_;
+    }
     // LMB is the disturbance ray wherever there is gas to disturb - unless it hits a rigid body,
     // which it then grabs; the camera lives on the wheel.
     bool gas = snap_ && snap_->mode == rf::SimMode::WindTunnel;
@@ -253,6 +265,11 @@ ViewportTool& Viewport::toolFor(Qt::MouseButton button, const QPointF& pos) {
 }
 
 void Viewport::mousePressEvent(QMouseEvent* e) {
+    if (!grabbed_ && e->button() == Qt::LeftButton && !(e->modifiers() & Qt::ShiftModifier)) {
+        int body;
+        Vector3 hit;
+        if (pickAnyBody(camera_.screenRay(e->position(), size()), body, hit)) emit bodyClicked(body);
+    }
     if (!grabbed_) grabbed_ = &toolFor(e->button(), e->position());
     grabbed_->press(*this, e);
 }
@@ -322,7 +339,7 @@ bool Viewport::pickBody(const Ray& ray, int& body, Vector3& hit) const {
     float best = 1e9f;
     for (int i = 0; i < int(snap_->bodies.size()); ++i) {
         const auto& b = snap_->bodies[i];
-        if (!b.collisionShape) continue;
+        if (!b.collisionShape || unpickable(i)) continue;
         rf::Matrix3x3 Rt = b.rot.toMatrix3x3().transposed();
         float t;
         Vector3 n;
@@ -345,7 +362,7 @@ bool Viewport::pickBody(const Ray& ray, int& body, Vector3& hit) const {
     float bestRatio = 1.0f;
     for (int i = 0; i < int(snap_->bodies.size()); ++i) {
         const auto& b = snap_->bodies[i];
-        if (!b.movable) continue;
+        if (!b.movable || unpickable(i)) continue;
         float t = rf::dot(b.pos - ray.origin, ray.dir);
         if (t <= 0) continue;
         float perp = rf::length(b.pos - ray.at(t));
@@ -359,6 +376,57 @@ bool Viewport::pickBody(const Ray& ray, int& body, Vector3& hit) const {
         }
     }
     return body >= 0;
+}
+
+bool Viewport::pickAnyBody(const Ray& ray, int& body, Vector3& hit) const {
+    body = -1;
+    if (!snap_) return false;
+    float best = 1e9f;
+    for (int i = 0; i < int(snap_->bodies.size()); ++i) {
+        const auto& b = snap_->bodies[i];
+        if (!b.collisionShape || unpickable(i)) continue;
+        const rf::Matrix3x3 Rt = b.rot.toMatrix3x3().transposed();
+        float t;
+        Vector3 n;
+        if (b.collisionShape->raycast(Rt * (ray.origin - b.pos), Rt * ray.dir, best, t, n) && t < best) {
+            best = t;
+            body = i;
+        }
+    }
+    if (body >= 0) hit = ray.at(best);
+    return body >= 0;
+}
+
+// The selected thing's bodies, outlined by their oriented bounding boxes (slightly larger, drawn
+// over everything so the selection shows even behind other bodies).
+void Viewport::drawHighlight(const QMatrix4x4& vp) {
+    if (!snap_ || highlight_.empty()) return;
+    std::vector<float> d;
+    for (int i : highlight_) {
+        if (i < 0 || i >= int(snap_->bodies.size())) continue;
+        const auto& b = snap_->bodies[size_t(i)];
+        Vector3 lo(-b.radius), hi(b.radius);
+        if (b.shape == rf::ShapeType::Box) {
+            lo = -b.halfExtents;
+            hi = b.halfExtents;
+        } else if (b.mesh && !b.mesh->empty()) {
+            const rf::AABB box = b.mesh->bounds();
+            lo = box.lo;
+            hi = box.hi;
+        }
+        const Vector3 pad = (hi - lo) * 0.04f + Vector3(0.004f);
+        lo -= pad;
+        hi += pad;
+        const rf::Matrix3x3 R = b.rot.toMatrix3x3();
+        Vector3 c[8];
+        for (int k = 0; k < 8; ++k)
+            c[k] = b.pos + R * Vector3(k & 1 ? hi.x : lo.x, k & 2 ? hi.y : lo.y, k & 4 ? hi.z : lo.z);
+        const int edges[12][2] = {{0, 1}, {2, 3}, {4, 5}, {6, 7}, {0, 2}, {1, 3}, {4, 6}, {5, 7}, {0, 4}, {1, 5}, {2, 6}, {3, 7}};
+        for (const auto& e : edges) d.insert(d.end(), {c[e[0]].x, c[e[0]].y, c[e[0]].z, 0, c[e[1]].x, c[e[1]].y, c[e[1]].z, 0});
+    }
+    glDisable(GL_DEPTH_TEST);
+    drawLines(d, GL_LINES, vp, QVector4D(0.35f, 0.68f, 1.0f, 1.0f), 2);
+    glEnable(GL_DEPTH_TEST);
 }
 
 void Viewport::drawJoints(const QMatrix4x4& vp) {
@@ -1151,6 +1219,7 @@ void Viewport::paintGL() {
     drawJoints(vp);
     drawDebugProbe(vp);
     drawGrab(vp);
+    drawHighlight(vp);
 
     // Emitter / heat source markers.
     if (snap_->mode == rf::SimMode::Fluid && snap_->emitter.enabled) {

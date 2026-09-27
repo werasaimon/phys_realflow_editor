@@ -40,6 +40,9 @@ public:
     void setSmokeDensity(float d) { smokeDensity_ = d; update(); }
     void setSliceOpacity(float a) { sliceOpacity_ = a; update(); }
     void frameScene();
+    // What "Показать всё" (F) and a new scene frame: the scene builder's objects instead of the whole
+    // world box (an invalid box: the world box again).
+    void setFocusBox(const rf::AABB& box) { focusBox_ = box; }
 
     static QColor colormapColor(int map, float t);
     float renderFps() const { return fps_; }
@@ -52,6 +55,13 @@ public:
     bool pickBody(const Ray& ray, int& body, rf::Vector3& hit) const;
     // Nearest particle (liquid, soft body) or cloth vertex hit by the ray; hit = its centre.
     bool pickParticle(const Ray& ray, rf::Vector3& hit) const;
+    // Any body under the cursor, static ones too (the scene builder selects walls and floors).
+    bool pickAnyBody(const Ray& ray, int& body, rf::Vector3& hit) const;
+    // The scene builder's feedback: the bodies of the selected thing get an outline; locked ones
+    // are invisible to the mouse (it passes through them to what is behind).
+    void setHighlightBodies(const std::vector<int>& bodies) { highlight_ = bodies; update(); }
+    void setUnpickableBodies(const std::vector<char>& flags) { unpickable_ = flags; }
+    bool unpickable(int body) const { return body >= 0 && body < int(unpickable_.size()) && unpickable_[size_t(body)]; }
     void showProbe(const Ray& ray, const rf::Vector3& hit);
     void setBrushRadius(float r) { brushRadius_ = r; }
 
@@ -62,6 +72,10 @@ signals:
     void particleGrabStarted(rf::Vector3 point); // cloth / soft body / liquid particle under the cursor
     void grabMoved(rf::Vector3 target);
     void grabReleased();
+    void bodyClicked(int body);                       // left click on any body: select it
+    void moveStarted(int body, rf::Vector3 hit);      // Shift + left drag: move the body's thing
+    void moveDragged(rf::Vector3 point);              // the cursor on the horizontal plane of the hit
+    void moveFinished();
     // The GPU / driver cannot do OpenGL 3.0: the window offers a restart in software mode.
     void openGLUnsupported(QString renderer);
 
@@ -101,6 +115,7 @@ private:
     void drawProbe(const QMatrix4x4& vp);
     void drawDebugProbe(const QMatrix4x4& vp); // the engine's Probe drawing (lines, points, boxes)
     void drawGrab(const QMatrix4x4& vp);
+    void drawHighlight(const QMatrix4x4& vp); // outline of the scene builder's selection
     void drawJoints(const QMatrix4x4& vp);
     ViewportTool& toolFor(Qt::MouseButton button, const QPointF& pos);
     void drawVolume(const QMatrix4x4& vp, const QVector3D& eye);
@@ -149,12 +164,16 @@ private:
     OrbitTool orbitTool_;
     DisturbTool disturbTool_;
     GrabTool grabTool_;
+    MoveTool moveTool_;
     ViewportTool* grabbed_ = nullptr; // tool that received the press, keeps the drag
     Ray probeRay_;
     rf::Vector3 probeHit_;
     qint64 probeTime_ = 0;
     float brushRadius_ = 0.15f;
     bool framedOnce_ = false;
+    rf::AABB focusBox_;            // what to frame when valid (the builder's objects)
+    std::vector<int> highlight_;   // bodies outlined as selected
+    std::vector<char> unpickable_; // per body: the mouse passes through
     std::string lastSceneName_; // the scene is framed again when another one is loaded
 
     int colormap_ = Turbo;

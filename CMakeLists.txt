@@ -36,7 +36,12 @@ qt_add_executable(realflow WIN32
   src/ViewportTools.h   src/ViewportTools.cpp
   src/FluidSurfaceRenderer.h src/FluidSurfaceRenderer.cpp
   src/PlotPanel.h       src/PlotPanel.cpp
-  src/SceneBuilder.h    src/SceneBuilder.cpp
+  src/SceneBuilder.h    src/SceneBuilder.cpp  src/SceneBuilderPanels.cpp
+  src/ObjectInspector.h src/ObjectInspector.cpp
+  src/InspectorWidgets.h src/InspectorWidgets.cpp
+  src/RoleBar.h         src/RoleBar.cpp
+  src/Icons.h           src/Icons.cpp
+  src/SelfTest.h        src/SelfTest.cpp
 )
 target_link_libraries(realflow PRIVATE rfcore rfsamples
   Qt6::Core Qt6::Gui Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets Qt6::Charts)

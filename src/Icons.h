@@ -1,0 +1,24 @@
+#pragma once
+// Icons of the editor, drawn in code with QPainter: no image files, one consistent look (soft light
+// from the top left, a thin darker outline, transparent background), crisp at any screen scale
+// (each icon holds a 1x and a 2x pixmap). The shapes are shaded like small 3D objects so a beginner
+// recognises "cube" and "sphere" at a glance; each role has a picture of what it turns a shape into.
+#include "scene/SceneGraph.h"
+
+#include <QIcon>
+#include <QPixmap>
+#include <QString>
+
+// The roles as the editor shows them: what a shape is made of, and what it also does.
+enum class RoleIcon { Rigid, Soft, Liquid, Cloth, Magnet, Smoke, Flame, Heat, Count };
+
+// Buttons of the simulation: run, pause, one step, back to the start, undo, redo, eye, lock.
+enum class ControlIcon { Play, Pause, Step, Reset, Undo, Redo, Visible, Hidden, Locked, Unlocked, Count };
+
+QIcon shapeIcon(rf::ShapeKind shape, int size = 48);
+QIcon roleIcon(RoleIcon role, int size = 40);
+QIcon controlIcon(ControlIcon control, int size = 32);
+QPixmap rolePixmap(RoleIcon role, int size); // for small chips next to a name
+
+// Writes every icon as a PNG into `dir` (for the README and a quick look); returns the file count.
+int dumpIcons(const QString& dir, int size = 96);

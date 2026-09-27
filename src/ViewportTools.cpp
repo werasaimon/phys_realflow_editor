@@ -61,6 +61,29 @@ void GrabTool::release(Viewport& v, QMouseEvent* e) {
     }
 }
 
+void MoveTool::press(Viewport& v, QMouseEvent* e) {
+    int body;
+    rf::Vector3 hit;
+    if (e->button() != Qt::LeftButton || !v.pickAnyBody(v.camera().screenRay(e->position(), v.size()), body, hit)) return;
+    moving_ = true;
+    planeY_ = hit.y;
+    emit v.moveStarted(body, hit);
+}
+
+void MoveTool::move(Viewport& v, QMouseEvent* e) {
+    if (!moving_) return;
+    const Ray ray = v.camera().screenRay(e->position(), v.size());
+    if (std::fabs(ray.dir.y) < 1e-4f) return; // looking along the floor: no crossing point
+    const float t = (planeY_ - ray.origin.y) / ray.dir.y;
+    if (t > 0) emit v.moveDragged(ray.at(t));
+}
+
+void MoveTool::release(Viewport& v, QMouseEvent* e) {
+    if (!moving_ || e->button() != Qt::LeftButton) return;
+    moving_ = false;
+    emit v.moveFinished();
+}
+
 void DisturbTool::press(Viewport& v, QMouseEvent* e) {
     if (e->button() != Qt::LeftButton) {
         fallback_.press(v, e);

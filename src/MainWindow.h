@@ -25,8 +25,15 @@ public:
     MainWindow();
     ~MainWindow() override;
 
-    // Automation: load a preset, simulate `frames` frames, save a screenshot and/or CSV, quit.
+    // Automation: load a preset (-1: the scene builder's new scene), simulate `frames` frames, save
+    // a screenshot and/or CSV, quit.
     void runAutomation(int preset, int frames, const QString& screenshotPath, const QString& csvPath);
+    // The first start without a preset: the builder's new scene (a floor), running.
+    void startBuilder();
+    // The builder starts on this scene file instead of an empty floor (the command line's --scene).
+    void setStartScene(const QString& path) { startScene_ = path; }
+    // The screenshot of the automation shows the whole window (panels too), not only the 3D view.
+    void setScreenshotWholeWindow(bool on) { auto_.wholeWindow = on; }
 
 private:
     // UI construction
@@ -35,6 +42,14 @@ private:
     void buildVisualDock();
     void buildResultsDock();
     void buildSceneBuilderDock(); // the "Конструктор": shapes with roles, no code (SceneBuilder)
+    void connectSceneBuilder();
+    void buildMainToolbar();      // the big "Создать" bar: shapes, run / step / reset, undo / redo, samples
+    void buildSamplesMenu();      // the SDK's ready-made scenes, by category
+    // A beginner sees the builder and the 3D view; "Эксперт" brings back every solver parameter and
+    // the visualisation settings, "Графики" the readings and plots at the bottom.
+    void buildLayoutActions();
+    void setExpertMode(bool on);
+    void setGraphsVisible(bool on);
     void buildSceneMenu();
     ParamForm* buildObjectForm();
     ParamForm* buildFluidForm();
@@ -69,8 +84,13 @@ private:
     std::string lastSceneName_;
     qint64 lastInfoUpdate_ = 0;
 
-    QComboBox* presetCombo_ = nullptr;
+    class QMenu* samplesMenu_ = nullptr;
+    class QActionGroup* samplesGroup_ = nullptr;
+    QAction* expertAct_ = nullptr;
+    QAction* graphsAct_ = nullptr;
     QAction* playAct_ = nullptr;
+    QAction* stepAct_ = nullptr;
+    QAction* resetAct_ = nullptr;
     std::vector<ParamForm*> forms_;
     QGroupBox *objectBox_ = nullptr, *fluidBox_ = nullptr, *gasBox_ = nullptr, *brushBox_ = nullptr,
               *rigidBox_ = nullptr, *fieldBox_ = nullptr, *particleBox_ = nullptr, *sceneBox_ = nullptr;
@@ -79,6 +99,7 @@ private:
     QTableWidget* sensors_ = nullptr; // every probe channel, by name
     PlotPanel* plots_ = nullptr;
     SceneBuilder* builder_ = nullptr;
+    QString startScene_;
     QLabel* status_ = nullptr;
 
     // Mouse brush (GUI-side settings, applied through Disturbance commands)
@@ -94,6 +115,7 @@ private:
         int preset = 0;
         int frames = 0;
         int settle = 0;
+        bool wholeWindow = false;
         QString shot, csv;
     } auto_;
 };

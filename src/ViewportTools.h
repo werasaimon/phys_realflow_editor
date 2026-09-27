@@ -43,6 +43,19 @@ private:
     OrbitTool fallback_; // empty space / other buttons move the camera
 };
 
+// Shift + LMB drags a body's thing across the floor (the scene builder moves it): the hit point
+// stays under the cursor on the horizontal plane through it.
+class MoveTool : public ViewportTool {
+public:
+    void press(Viewport& v, QMouseEvent* e) override;
+    void move(Viewport& v, QMouseEvent* e) override;
+    void release(Viewport& v, QMouseEvent* e) override;
+
+private:
+    bool moving_ = false;
+    float planeY_ = 0;
+};
+
 // LMB drag injects a disturbance into the gas: the cursor ray is unprojected into 3D, intersected
 // with the slice plane (or the middle of the domain) and the hit point's motion gives the velocity.
 class DisturbTool : public ViewportTool {
