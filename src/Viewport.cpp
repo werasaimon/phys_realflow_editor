@@ -1,5 +1,12 @@
+// The 3D view (see Viewport.h): OpenGL set-up (shaders, unit cubes, dynamic buffers, textures),
+// the upload of each snapshot and the drawing of one frame - floor, bodies, cloth and soft bodies,
+// particles, the field slice, smoke, lines, the gizmo and the 2D overlay. Input is in
+// ViewportInput.cpp and ViewportTools.cpp, lights and shadows in ViewportLights.cpp, the play frame
+// and the orbit pivot in ViewportPlay.cpp.
 #include "Viewport.h"
 #include "Shaders.h"
+#include "MeshNormals.h"
+#include "core/Probe.h"
 
 #include <QColor>
 #include <QDateTime>
@@ -74,6 +81,8 @@ Viewport::~Viewport() {
     if (depthFbo_) glDeleteFramebuffers(1, &depthFbo_);
     if (maskTex_) glDeleteTextures(1, &maskTex_);
     if (maskFbo_) glDeleteFramebuffers(1, &maskFbo_);
+    if (shadowTex_) glDeleteTextures(1, &shadowTex_);
+    if (shadowFbo_) glDeleteFramebuffers(1, &shadowFbo_);
     hullCache_.clear(); // GL objects must die while the context is current
     fluidSurface_.release();
     doneCurrent();
@@ -101,6 +110,7 @@ void Viewport::buildShaders() {
     buildProgram(volumeProg_, h + kVolVS, h + kVolFS, "volume", {"aPos"});
     buildProgram(planetProg_, h + kPlanetVS, h + kPlanetFS, "planet", {"aPos", "aNormal", "aScalar"});
     buildProgram(outlineProg_, h + kBgVS, h + kOutlineFS, "outline", {});
+    buildProgram(shadowProg_, h + kShadowVS, h + kShadowFS, "shadow", {"aPos"});
 }
 
 void Viewport::initializeGL() {
@@ -126,6 +136,14 @@ void Viewport::initializeGL() {
     bg_.vao.create();
     unitSphere_ = std::make_shared<rf::TriMesh>(rf::primitives::sphere(1.0f, 20, 10)); // outlines of sphere bodies
 
+    createUnitCubes();
+    createDynamicBuffers();
+    createFieldTextures();
+}
+
+// The two fixed unit cubes: one with face normals for box bodies ([-1, 1]), one for the volume
+// pass ([0, 1], positions only).
+void Viewport::createUnitCubes() {
     // Unit cube with face normals (for boxes), positions in [-1, 1].
     {
         std::vector<float> v;
@@ -176,6 +194,10 @@ void Viewport::initializeGL() {
         volumeBox_.count = 36;
         volumeBox_.vao.release();
     }
+}
+
+// The buffers refilled every frame (obstacle, particles, lines, slice) and their vertex layouts.
+void Viewport::createDynamicBuffers() {
     // Dynamic buffers.
     auto makeDyn = [&](Buffer& b) {
         b.vao.create();
@@ -217,7 +239,10 @@ void Viewport::initializeGL() {
     glEnableVertexAttribArray(1);
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 5 * sizeof(float), reinterpret_cast<void*>(3 * sizeof(float)));
     slice_.vao.release();
+}
 
+// The textures of the field slice (2D) and of the smoke volume (3D): linear, clamped at the edges.
+void Viewport::createFieldTextures() {
     glGenTextures(1, &sliceTex_);
     glBindTexture(GL_TEXTURE_2D, sliceTex_);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
@@ -570,22 +595,19 @@ void Viewport::setSnapshot(std::shared_ptr<const rf::RenderSnapshot> s) {
 }
 
 void Viewport::uploadObstacle(const rf::TriMesh& m) {
-    // Expanded, flat-or-smooth shaded triangles (crease angle 35 degrees).
-    auto vn = m.vertexNormals();
+    // Expanded triangles with auto-smooth normals (MeshNormals.h: crease angle 35 degrees).
+    const std::vector<Vector3> normals = autoSmoothNormals(m);
     std::vector<float> v;
-    v.reserve(m.triangles.size() * 3 * 7);
+    v.reserve(m.triangles.size() * 3 * 6);
     obstacleVertexMap_.clear();
-    const float creaseCos = std::cos(35.0f * rf::kPi / 180.0f);
-    for (size_t t = 0; t < m.triangles.size(); ++t) {
-        Vector3 fn = m.faceNormal(t);
+    for (size_t t = 0; t < m.triangles.size(); ++t)
         for (int k = 0; k < 3; ++k) {
-            uint32_t id = m.triangles[t][k];
+            const uint32_t id = m.triangles[t][k];
             const Vector3& p = m.positions[id];
-            Vector3 n = rf::dot(vn[id], fn) > creaseCos ? vn[id] : fn;
+            const Vector3& n = normals[3 * t + size_t(k)];
             v.insert(v.end(), {p.x, p.y, p.z, n.x, n.y, n.z});
             obstacleVertexMap_.push_back(id);
         }
-    }
     obstacle_.count = int(obstacleVertexMap_.size());
     obstacle_.vao.bind();
     obstacle_.vbo.bind();
@@ -745,21 +767,21 @@ void Viewport::pruneHullCache() {
     }
 }
 
-Viewport::GpuMesh& Viewport::hullMesh(const std::shared_ptr<const rf::TriMesh>& m, bool smooth) {
+// A body's mesh on the GPU, made once per mesh: expanded triangles with auto-smooth normals - the
+// same rule in edit mode and in play, so a sphere is round in both and a cube keeps its edges.
+Viewport::GpuMesh& Viewport::hullMesh(const std::shared_ptr<const rf::TriMesh>& m) {
     GpuMesh& g = hullCache_[m.get()];
     if (g.vao) return g;
     g.mesh = m;
+    const std::vector<Vector3> normals = autoSmoothNormals(*m);
     std::vector<float> v;
-    std::vector<Vector3> vn;
-    if (smooth) vn = m->vertexNormals();
-    for (size_t t = 0; t < m->triangles.size(); ++t) {
-        Vector3 fn = m->faceNormal(t); // flat shading shows the facets GJK/EPA works with
+    v.reserve(m->triangles.size() * 3 * 7);
+    for (size_t t = 0; t < m->triangles.size(); ++t)
         for (int k = 0; k < 3; ++k) {
             const Vector3& p = m->positions[m->triangles[t][k]];
-            const Vector3& n = smooth ? vn[m->triangles[t][k]] : fn;
+            const Vector3& n = normals[3 * t + size_t(k)];
             v.insert(v.end(), {p.x, p.y, p.z, n.x, n.y, n.z, 0.0f});
         }
-    }
     g.vao = std::make_unique<QOpenGLVertexArrayObject>();
     g.vao->create();
     g.vao->bind();
@@ -776,6 +798,12 @@ Viewport::GpuMesh& Viewport::hullMesh(const std::shared_ptr<const rf::TriMesh>& 
     g.vao->release();
     g.count = int(v.size() / 7);
     return g;
+}
+
+// A sleeping body looks as it did awake, as in edit mode; the research panel's layer "Sleeping"
+// (rf::DrawLayer::Sleeping) draws the sleepers darker - a debugging view, not the normal one.
+static float sleepDim(const rf::RenderSnapshot::Body& b) {
+    return b.sleeping && rf::Probe::layerOn(rf::DrawLayer::Sleeping) ? 0.55f : 1.0f;
 }
 
 void Viewport::drawBodies(const QMatrix4x4& view, const QMatrix4x4& proj) {
@@ -800,7 +828,7 @@ void Viewport::drawBodies(const QMatrix4x4& view, const QMatrix4x4& proj) {
             QMatrix4x4 M(R.m[0][0], R.m[0][1], R.m[0][2], b.pos.x, R.m[1][0], R.m[1][1], R.m[1][2], b.pos.y,
                          R.m[2][0], R.m[2][1], R.m[2][2], b.pos.z, 0, 0, 0, 1);
             meshProg_.setUniformValue("uModel", M);
-            float dim = b.sleeping ? 0.55f : 1.0f; // sleeping bodies are drawn darker
+            const float dim = sleepDim(b); // darker only with the research layer "Sleeping"
             meshProg_.setUniformValue("uColor", QVector3D(b.color.x, b.color.y, b.color.z) * dim);
             if (b.shape == rf::ShapeType::Compound && showConvexParts_ && b.collisionShape) {
                 // Each convex part in its own shade: shows what the collision pipeline sees.
@@ -817,7 +845,7 @@ void Viewport::drawBodies(const QMatrix4x4& view, const QMatrix4x4& proj) {
                 }
                 continue;
             }
-            GpuMesh& g = hullMesh(b.mesh, b.shape == rf::ShapeType::Compound);
+            GpuMesh& g = hullMesh(b.mesh);
             g.vao->bind();
             glDrawArrays(GL_TRIANGLES, 0, g.count);
             g.vao->release();
@@ -844,12 +872,77 @@ void Viewport::drawBoxBodies(const QMatrix4x4& view, const QMatrix4x4& proj) {
                          R.m[2][0] * b.halfExtents.x, R.m[2][1] * b.halfExtents.y, R.m[2][2] * b.halfExtents.z, b.pos.z,
                          0, 0, 0, 1);
             meshProg_.setUniformValue("uModel", M);
-            float dim = b.sleeping ? 0.55f : 1.0f;
+            const float dim = sleepDim(b);
             meshProg_.setUniformValue("uColor", QVector3D(b.color.x, b.color.y, b.color.z) * dim);
             glDrawArrays(GL_TRIANGLES, 0, cube_.count);
         }
         cube_.vao.release();
     }
+}
+
+// One cloth sheet as triangles (7 floats a vertex: position, normal, charring), both sides, each
+// with its own normal; smooth normals from the grid.
+static void appendClothSheet(const rf::RenderSnapshot::ClothMesh& c, std::vector<float>& v) {
+    const int w = c.width, h = c.height;
+    const auto& P = c.positions;
+    std::vector<Vector3> N(P.size(), Vector3(0.0f));
+    auto id = [w](int x, int y) { return x + w * y; };
+    for (int y = 0; y + 1 < h; ++y)
+        for (int x = 0; x + 1 < w; ++x) {
+            int a = id(x, y), b = id(x + 1, y), cc = id(x, y + 1), d = id(x + 1, y + 1);
+            Vector3 n1 = cross(P[b] - P[a], P[d] - P[a]), n2 = cross(P[d] - P[a], P[cc] - P[a]);
+            N[a] += n1 + n2; N[b] += n1; N[d] += n1 + n2; N[cc] += n2;
+        }
+    for (Vector3& n : N) n = rf::normalize(n);
+    auto vert = [&](int i, float side) {
+        const float burnt = c.burnt.empty() ? 0.0f : c.burnt[i];
+        v.insert(v.end(), {P[i].x, P[i].y, P[i].z, N[i].x * side, N[i].y * side, N[i].z * side, burnt});
+    };
+    // Cells a crack has cut through are not drawn: the torn edge runs along the threads.
+    auto tri = [&](int p, int q, int r) {
+        vert(p, 1); vert(q, 1); vert(r, 1);    // front
+        vert(p, -1); vert(r, -1); vert(q, -1); // back
+    };
+    for (int y = 0; y + 1 < h; ++y)
+        for (int x = 0; x + 1 < w; ++x) {
+            if (!c.cellIntact.empty() && !c.cellIntact[x + (w - 1) * y]) continue;
+            int a = id(x, y), b = id(x + 1, y), cc = id(x, y + 1), d = id(x + 1, y + 1);
+            tri(a, b, d);
+            tri(a, d, cc);
+        }
+}
+
+// A soft body's skinned surface as triangles with smooth normals.
+static void appendSoftSurface(const rf::RenderSnapshot::SoftMesh& m, std::vector<float>& v) {
+    const auto& P = m.positions;
+    std::vector<Vector3> N(P.size(), Vector3(0.0f));
+    for (const auto& t : m.triangles) {
+        Vector3 n = rf::cross(P[t[1]] - P[t[0]], P[t[2]] - P[t[0]]);
+        for (uint32_t k : t) N[k] += n;
+    }
+    for (Vector3& n : N) n = rf::normalize(n);
+    for (const auto& t : m.triangles)
+        for (uint32_t k : t) v.insert(v.end(), {P[k].x, P[k].y, P[k].z, N[k].x, N[k].y, N[k].z, 0.0f});
+}
+
+// The cloth mesh's buffer, made once: refilled every frame, laid out as the body meshes.
+void Viewport::ensureClothMesh() {
+    GpuMesh& g = clothMesh_;
+    if (g.vao) return;
+    g.vao = std::make_unique<QOpenGLVertexArrayObject>();
+    g.vao->create();
+    g.vao->bind();
+    g.vbo = std::make_unique<QOpenGLBuffer>(QOpenGLBuffer::VertexBuffer);
+    g.vbo->create();
+    g.vbo->setUsagePattern(QOpenGLBuffer::DynamicDraw);
+    g.vbo->bind();
+    glEnableVertexAttribArray(0);
+    glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 7 * sizeof(float), nullptr);
+    glEnableVertexAttribArray(1);
+    glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 7 * sizeof(float), reinterpret_cast<void*>(3 * sizeof(float)));
+    glEnableVertexAttribArray(2);
+    glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, 7 * sizeof(float), reinterpret_cast<void*>(6 * sizeof(float)));
+    g.vao->release();
 }
 
 void Viewport::drawCloths(const QMatrix4x4& view, const QMatrix4x4& proj) {
@@ -858,67 +951,17 @@ void Viewport::drawCloths(const QMatrix4x4& view, const QMatrix4x4& proj) {
     std::vector<float> v;
     std::vector<std::pair<int, int>> ranges; // first vertex, count per cloth
     for (const auto& c : snap_->cloths) {
-        const int w = c.width, h = c.height;
-        const auto& P = c.positions;
-        std::vector<Vector3> N(P.size(), Vector3(0.0f));
-        auto id = [w](int x, int y) { return x + w * y; };
-        for (int y = 0; y + 1 < h; ++y)
-            for (int x = 0; x + 1 < w; ++x) {
-                int a = id(x, y), b = id(x + 1, y), cc = id(x, y + 1), d = id(x + 1, y + 1);
-                Vector3 n1 = cross(P[b] - P[a], P[d] - P[a]), n2 = cross(P[d] - P[a], P[cc] - P[a]);
-                N[a] += n1 + n2; N[b] += n1; N[d] += n1 + n2; N[cc] += n2;
-            }
-        for (Vector3& n : N) n = rf::normalize(n);
         const int first = int(v.size() / 7);
-        auto vert = [&](int i, float side) {
-            const float burnt = c.burnt.empty() ? 0.0f : c.burnt[i];
-            v.insert(v.end(), {P[i].x, P[i].y, P[i].z, N[i].x * side, N[i].y * side, N[i].z * side, burnt});
-        };
-        // Cells a crack has cut through are not drawn: the torn edge runs along the threads.
-        auto tri = [&](int p, int q, int r) {
-            vert(p, 1); vert(q, 1); vert(r, 1);    // front
-            vert(p, -1); vert(r, -1); vert(q, -1); // back
-        };
-        for (int y = 0; y + 1 < h; ++y)
-            for (int x = 0; x + 1 < w; ++x) {
-                if (!c.cellIntact.empty() && !c.cellIntact[x + (w - 1) * y]) continue;
-                int a = id(x, y), b = id(x + 1, y), cc = id(x, y + 1), d = id(x + 1, y + 1);
-                tri(a, b, d);
-                tri(a, d, cc);
-            }
+        appendClothSheet(c, v);
         ranges.push_back({first, int(v.size() / 7) - first});
     }
-    // Soft bodies: their skinned surfaces with smooth normals.
-    for (const auto& m : snap_->softMeshes) {
-        const auto& P = m.positions;
-        std::vector<Vector3> N(P.size(), Vector3(0.0f));
-        for (const auto& t : m.triangles) {
-            Vector3 n = rf::cross(P[t[1]] - P[t[0]], P[t[2]] - P[t[0]]);
-            for (uint32_t k : t) N[k] += n;
-        }
-        for (Vector3& n : N) n = rf::normalize(n);
+    for (const auto& m : snap_->softMeshes) { // soft bodies: their skinned surfaces
         const int first = int(v.size() / 7);
-        for (const auto& t : m.triangles)
-            for (uint32_t k : t) v.insert(v.end(), {P[k].x, P[k].y, P[k].z, N[k].x, N[k].y, N[k].z, 0.0f});
+        appendSoftSurface(m, v);
         ranges.push_back({first, int(v.size() / 7) - first});
     }
+    ensureClothMesh();
     GpuMesh& g = clothMesh_;
-    if (!g.vao) {
-        g.vao = std::make_unique<QOpenGLVertexArrayObject>();
-        g.vao->create();
-        g.vao->bind();
-        g.vbo = std::make_unique<QOpenGLBuffer>(QOpenGLBuffer::VertexBuffer);
-        g.vbo->create();
-        g.vbo->setUsagePattern(QOpenGLBuffer::DynamicDraw);
-        g.vbo->bind();
-        glEnableVertexAttribArray(0);
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 7 * sizeof(float), nullptr);
-        glEnableVertexAttribArray(1);
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 7 * sizeof(float), reinterpret_cast<void*>(3 * sizeof(float)));
-        glEnableVertexAttribArray(2);
-        glVertexAttribPointer(2, 1, GL_FLOAT, GL_FALSE, 7 * sizeof(float), reinterpret_cast<void*>(6 * sizeof(float)));
-        g.vao->release();
-    }
     g.vbo->bind();
     g.vbo->allocate(v.data(), int(v.size() * sizeof(float)));
     meshProg_.bind();
@@ -956,7 +999,7 @@ void Viewport::drawParticles(const QMatrix4x4& view, const QMatrix4x4& proj) {
         for (const auto& b : snap_->bodies)
             if (b.shape == rf::ShapeType::Sphere)
             {
-                float dim = b.sleeping ? 0.55f : 1.0f;
+                const float dim = sleepDim(b);
                 v.insert(v.end(), {b.pos.x, b.pos.y, b.pos.z, -1e9f, b.color.x * dim, b.color.y * dim, b.color.z * dim, b.radius});
             }
         particles_.vbo.bind();
@@ -1200,9 +1243,12 @@ void Viewport::paintGL() {
                    QString("OpenGL 3.0 недоступен (%1).\nЗапустите с ключом --software-gl — рендер на процессоре.").arg(renderer_));
         return;
     }
+    syncLookThrough();
+    if (snap_) renderSunShadow();
     beginFrame();
     if (!snap_) return;
     const QMatrix4x4 view = viewMatrix(), proj = projMatrix(), vp = proj * view;
+    applySceneLights(view);
     drawFloorAndDomain(vp);
     drawScene(view, proj);
     drawOverlays3D(vp);
@@ -1294,6 +1340,7 @@ void Viewport::drawOverlays3D(const QMatrix4x4& vp) {
     drawGrab(vp);
     drawHighlight(vp);
     drawColliderGuides(vp);
+    drawSceneMarkers(vp);
     drawGizmo(vp);
     if (snap_->mode == rf::SimMode::Fluid && snap_->emitter.enabled) { // the liquid nozzle's direction
         const auto& em = snap_->emitter;
@@ -1421,6 +1468,8 @@ void Viewport::drawOverlay() {
     }
 
     drawAxesAndHints(p);
+    drawOrbitPivot(p);
+    drawPlayFrame(p);
     p.end();
 }
 

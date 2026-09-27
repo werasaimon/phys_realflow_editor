@@ -1,3 +1,6 @@
+// What the mouse does in the view (see ViewportTools.h): the camera tool (orbit, pan, zoom, look
+// around), the grab tool of play mode (a mouse joint on a body or a particle) and the edit tool
+// (select, box select, gizmo drags, Shift-clone, keyboard transforms).
 #include "ViewportTools.h"
 
 #include "Viewport.h"
@@ -15,6 +18,7 @@ void CameraTool::press(Viewport& v, QMouseEvent* e) {
     move_ = v.cameraMoveFor(e->button(), e->modifiers());
     if (move_ == CameraMove::Orbit) pivot_ = v.pointUnderCursor(e->position());
     if (move_ == CameraMove::Dolly) pivot_ = v.camera().target();
+    v.setOrbitPivot(pivot_, move_ == CameraMove::Orbit && !v.flying()); // the mark on the point it turns around
 }
 
 void CameraTool::move(Viewport& v, QMouseEvent* e) {
@@ -33,8 +37,10 @@ void CameraTool::move(Viewport& v, QMouseEvent* e) {
     v.update();
 }
 
-void CameraTool::release(Viewport&, QMouseEvent* e) {
-    if (e->buttons() == Qt::NoButton) move_ = CameraMove::None;
+void CameraTool::release(Viewport& v, QMouseEvent* e) {
+    if (e->buttons() != Qt::NoButton) return;
+    move_ = CameraMove::None;
+    v.setOrbitPivot(pivot_, false);
 }
 
 // ---------------------------------------------------------------------------
@@ -113,6 +119,7 @@ bool EditTool::pressTransform(Viewport& v, QMouseEvent* e) {
 
 void EditTool::pressLeft(Viewport& v, QMouseEvent* e) {
     pressPos_ = boxEnd_ = e->position();
+    pressShift_ = e->modifiers() & Qt::ShiftModifier;
     if (v.gizmoShown()) {
         pending_ = v.gizmo().hitTest(v.gizmoView(), pixel(e));
         if (pending_ != GizmoHandle::None) return; // the drag starts once the mouse has moved 3 px
@@ -155,10 +162,14 @@ bool EditTool::moveGizmo(Viewport& v, QMouseEvent* e) {
         pending_ = GizmoHandle::None;
         floorDrag_ = false;
         virtualMouse_ = lastMouse_ = press;
+        cloning_ = cloneShiftHeld_ = pressShift_; // Shift at the start: a clone, as in 3ds Max
         emit v.gizmoStarted();
+        if (cloning_) emit v.cloneDragStarted();
     }
     if (!v.gizmo().dragging()) return false;
-    const float speed = (e->modifiers() & Qt::ShiftModifier) && !floorDrag_ ? 0.1f : 1.0f;
+    const bool shift = e->modifiers() & Qt::ShiftModifier;
+    if (!shift) cloneShiftHeld_ = false; // let go: pressed again, it means "finer"
+    const float speed = shift && !floorDrag_ && !cloneShiftHeld_ ? 0.1f : 1.0f;
     virtualMouse_ += (pixel(e) - lastMouse_) * speed;
     lastMouse_ = pixel(e);
     emit v.gizmoMoved(v.gizmo().drag(v.gizmoView(), virtualMouse_, snap));
@@ -210,7 +221,10 @@ void EditTool::release(Viewport& v, QMouseEvent* e) {
     if (v.gizmo().dragging() && !v.gizmo().modal()) {
         v.gizmo().end();
         floorDrag_ = false;
+        const bool cloned = cloning_;
+        cloning_ = false;
         emit v.gizmoFinished();
+        if (cloned) emit v.cloneDragFinished(e->position()); // the popover opens at the cursor
         v.update();
         return;
     }

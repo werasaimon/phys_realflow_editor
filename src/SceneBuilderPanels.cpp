@@ -1,10 +1,13 @@
 // The scene builder's two tabs (see SceneBuilder.h): building the widgets, and copying between the
 // scene graph and the widgets. The editing logic is in SceneBuilder.cpp, the collider wireframes in
-// SceneBuilderColliders.cpp.
+// SceneBuilderColliders.cpp, several selected objects in SceneBuilderMulti.cpp. The scene list is a
+// tree: a group holds its members, an array its hidden template; ⧉ marks instances and their master.
 #include "SceneBuilder.h"
+#include "RuPlural.h"
 
 #include "ColliderPanel.h"
 #include "InspectorWidgets.h"
+#include "ManyPanels.h"
 #include "ObjectInspector.h"
 #include "RoleBar.h"
 
@@ -23,6 +26,9 @@
 #include <QSignalBlocker>
 #include <QStandardItemModel>
 #include <QTreeWidget>
+
+#include <map>
+#include <set>
 
 using namespace rf;
 
@@ -89,7 +95,8 @@ void SceneBuilder::buildSceneList() {
     list_->setMinimumHeight(150);
     list_->setColumnCount(3);
     list_->setHeaderHidden(true);
-    list_->setRootIsDecorated(false);
+    list_->setRootIsDecorated(true); // groups open and shut
+    list_->setObjectName("sceneList");
     list_->setIconSize(QSize(22, 22));
     list_->header()->setStretchLastSection(false);
     list_->header()->setSectionResizeMode(0, QHeaderView::Stretch);
@@ -97,7 +104,8 @@ void SceneBuilder::buildSceneList() {
         list_->header()->setSectionResizeMode(c, QHeaderView::Fixed);
         list_->setColumnWidth(c, 28);
     }
-    list_->setToolTip("Всё, что есть в сцене. Глаз — видимость, замок — мышь не трогает. Delete — удалить.");
+    list_->setToolTip("Всё, что есть в сцене. Глаз — видимость, замок — мышь не трогает. Delete — удалить. "
+                      "⧉ — экземпляр: правка одного меняет все");
     connect(list_, &QTreeWidget::itemClicked, this, &SceneBuilder::onListClicked);
     list_->setSelectionMode(QAbstractItemView::ExtendedSelection); // every selected object is highlighted
     connect(list_, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem* item) {
@@ -163,12 +171,17 @@ void SceneBuilder::buildInspector() {
     connect(roleBar_, &RoleBar::roleClicked, this, &SceneBuilder::toggleRole);
     body->addWidget(roleBar_);
     buildObjectCard(body);
-    buildGeometryCard(body);
-    body->addWidget(sectionTitle("Компоненты"));
-    buildMaterialCards(body);
-    buildColliderCard(body);
-    buildBehaviourCards(body);
-    buildAddComponent(body);
+    buildManyCards(body);
+    buildLightCards(body);
+    shapePart_ = new QWidget; // what only a shape has
+    auto* shape = column(shapePart_, 0);
+    buildGeometryCard(shape);
+    shape->addWidget(sectionTitle("Компоненты"));
+    buildMaterialCards(shape);
+    buildColliderCard(shape);
+    buildBehaviourCards(shape);
+    buildAddComponent(shape);
+    body->addWidget(shapePart_);
     col->addWidget(inspectorBody_);
     col->addStretch(1);
 }
@@ -198,10 +211,40 @@ void SceneBuilder::buildObjectCard(QVBoxLayout* col) {
     object_ = new ObjectInspector;
     connect(object_, &ObjectInspector::edited, this, &SceneBuilder::onObjectEdited);
     col->addWidget(object_);
-    auto* f = new QFormLayout;
+    sizeRow_ = new QWidget;
+    auto* f = new QFormLayout(sizeRow_);
+    f->setContentsMargins(0, 0, 0, 0);
     f->setSpacing(6);
     size_ = vectorField(f, "Размер, м", 0.005, 20, 0.05, 2);
-    col->addLayout(f);
+    col->addWidget(sizeRow_);
+}
+
+// The link of an instance, and the cards of a group and of an array.
+void SceneBuilder::buildManyCards(QVBoxLayout* col) {
+    instanceLink_ = new InlineBanner;
+    instanceLink_->setObjectName("instanceLink");
+    col->addWidget(instanceLink_);
+    groupCard_ = new ComponentCard("Группа", objectIcon(ObjectIcon::Group, 22));
+    groupCard_->setObjectName("groupCard");
+    groupPanel_ = new GroupPanel;
+    groupCard_->body()->addWidget(groupPanel_);
+    connect(groupCard_, &ComponentCard::removeClicked, this, &SceneBuilder::ungroupSelected);
+    connect(groupPanel_, &GroupPanel::ungroupClicked, this, &SceneBuilder::ungroupSelected);
+    connect(groupPanel_, &GroupPanel::gluedToggled, this, [this](bool on) { setGlued(selectedId_, on); });
+    col->addWidget(groupCard_);
+    arrayCard_ = new ComponentCard("Массив", objectIcon(ObjectIcon::ArrayLine, 22));
+    arrayCard_->setObjectName("arrayCard");
+    arrayPanel_ = new ArrayPanel;
+    arrayCard_->body()->addWidget(arrayPanel_);
+    connect(arrayCard_, &ComponentCard::removeClicked, this, [this] { explodeArray(selectedId_); });
+    connect(arrayPanel_, &ArrayPanel::explodeClicked, this, [this] { explodeArray(selectedId_); });
+    connect(arrayPanel_, &ArrayPanel::edited, this, &SceneBuilder::onArrayEdited);
+    col->addWidget(arrayCard_);
+}
+
+void SceneBuilder::onArrayEdited() {
+    if (filling_ || !arrayById(selectedId_)) return;
+    editArray(selectedId_, [this](ArrayObject& a) { arrayPanel_->writeTo(a); });
 }
 
 // What the object looks like. Physics never changes it: a collider or a role only use it.
@@ -262,6 +305,7 @@ void SceneBuilder::buildMaterialCards(QVBoxLayout* col) {
     noCollider_ = new InlineBanner;
     rigid->body()->insertWidget(0, noCollider_);
     rigidDensity_ = numberField(f, "Плотность, кг/м³", 1, 30000, 50, 0);
+    rigidDensity_->setObjectName("rigidDensity");
     friction_ = numberField(f, "Трение", 0, 2, 0.05, 2);
     restitution_ = numberField(f, "Упругость удара", 0, 1, 0.05, 2);
     fixed_ = checkField(f, "неподвижное (стена, стол)");
@@ -323,8 +367,9 @@ void SceneBuilder::fillAddMenu() {
     if (!e) return;
     const RoleIcon order[] = {RoleIcon::Rigid, RoleIcon::Collider, RoleIcon::Soft, RoleIcon::Liquid, RoleIcon::Cloth,
                               RoleIcon::Magnet, RoleIcon::Smoke, RoleIcon::Flame, RoleIcon::Heat};
+    const std::vector<RoleIcon> all = commonRoles(); // several selected: added to every one of them
     for (RoleIcon role : order) {
-        if (roleEnabled(*e, role)) continue;
+        if (std::find(all.begin(), all.end(), role) != all.end()) continue;
         QAction* a = addMenu_->addAction(roleIcon(role, 24), roleTitle(role));
         a->setToolTip(roleTip(role));
         a->setEnabled(!(role == RoleIcon::Cloth && e->shape == ShapeKind::Mesh));
@@ -336,32 +381,71 @@ void SceneBuilder::fillAddMenu() {
 // ---------------------------------------------------------------------------
 // Graph <-> widgets
 // ---------------------------------------------------------------------------
+// The active object's values (an instance: its master's geometry and components); with several
+// selected, "—" where they differ, the component cards of what all of them have, and the shape's
+// part only when every selected thing is a shape.
 void SceneBuilder::fillInspector() {
-    const Entity* e = selectedEntity();
-    emptyHint_->setVisible(!e);
-    inspectorBody_->setVisible(e != nullptr);
-    if (!e) {
-        refreshBanner();
-        return;
-    }
+    const SceneObject* o = selectedObject();
+    emptyHint_->setVisible(!o);
+    inspectorBody_->setVisible(o != nullptr);
+    if (!o) return refreshBanner();
     filling_ = true;
-    object_->setObject(*e);
-    {
+    clearMixed(inspectorBody_);
+    const Entity* own = entityById(o->id);
+    Entity shown = own ? resolveInstance(graph_, *own) : Entity();
+    if (!own) static_cast<SceneObject&>(shown) = *o;
+    const bool shapes = own && selectedEntities().size() == selection_.size();
+    object_->setObject(shown);
+    sizeRow_->setVisible(shapes);
+    shapePart_->setVisible(shapes);
+    roleBar_->setVisible(shapes);
+    if (shapes) {
         const QSignalBlocker quiet(shape_);
-        shape_->setCurrentIndex(int(e->shape));
+        shape_->setCurrentIndex(int(shown.shape));
         // "Модель" needs a file: offered only to an imported model (button "Модель" on the toolbar).
         if (auto* model = qobject_cast<QStandardItemModel*>(shape_->model()))
-            model->item(int(ShapeKind::Mesh))->setEnabled(e->shape == ShapeKind::Mesh);
+            model->item(int(ShapeKind::Mesh))->setEnabled(shown.shape == ShapeKind::Mesh);
+        modelFile_->setVisible(shown.shape == ShapeKind::Mesh);
+        modelFile_->setText("Файл: " + QFileInfo(QString::fromStdString(shown.meshFile)).fileName());
+        size_->setValue(shown.size);
+        fillDetails(shown);
+        roleBar_->setRoles(shown);
     }
-    modelFile_->setVisible(e->shape == ShapeKind::Mesh);
-    modelFile_->setText("Файл: " + QFileInfo(QString::fromStdString(e->meshFile)).fileName());
-    size_->setValue(e->size);
-    fillDetails(*e);
-    roleBar_->setRoles(*e);
+    fillManyCards(*o);
+    fillLightCards(*o);
+    shown_ = shown;
+    if (selection_.size() > 1) markMixed();
+    shown_ = readWidgets(); // what the widgets show, "—" included: an edit is what differs from it
     filling_ = false;
     refreshSections();
     refreshHeader();
     refreshBanner();
+}
+
+void SceneBuilder::fillManyCards(const SceneObject& o) {
+    const bool one = selection_.size() == 1;
+    const Group* g = groupById(o.id);
+    const ArrayObject* a = arrayById(o.id);
+    groupCard_->setVisible(one && g);
+    arrayCard_->setVisible(one && a);
+    if (one && g) groupPanel_->setGroup(*g, int(childrenOf(g->id).size()));
+    if (one && a) {
+        const SceneObject* t = findObject(graph_, a->templateId);
+        arrayPanel_->setArray(*a, t ? QString::fromStdString(t->name) : QString("?"));
+    }
+    const Entity* e = entityById(o.id);
+    int instances = 0;
+    for (const Entity& x : graph_.entities) instances += x.id != o.id && masterOf(x.id) == o.id;
+    if (one && e && e->instanceOf != 0 && masterOf(e->id) != e->id) {
+        const uint32_t id = e->id;
+        instanceLink_->showMessage("Экземпляр: связан с «" + QString::fromStdString(entityById(masterOf(id))->name) +
+                                       "» — форма и компоненты общие", "Отвязать", [this, id] { unlinkInstance(id); });
+    } else if (one && e && instances > 0) {
+        instanceLink_->showMessage("Образец для " + ruPlural(instances, "экземпляра", "экземпляров", "экземпляров") +
+                                   ": правка формы и компонентов меняет все");
+    } else {
+        instanceLink_->clearMessage();
+    }
 }
 
 void SceneBuilder::fillDetails(const Entity& e) {
@@ -421,10 +505,10 @@ void SceneBuilder::readDetails(Entity& e) const {
     e.heat.smoke = float(heatSmoke_->value());
 }
 
-void SceneBuilder::showTransform(const Entity& e) {
+void SceneBuilder::showTransform(const SceneObject& o) {
     filling_ = true;
-    object_->setObject(e);
-    size_->setValue(e.size);
+    object_->setObject(o);
+    if (const Entity* e = entityById(o.id)) size_->setValue(entityById(masterOf(e->id))->size);
     filling_ = false;
 }
 
@@ -436,31 +520,60 @@ void SceneBuilder::fillWorld() {
     plasma_->setChecked(graph_.world.magneticGas);
 }
 
+// One row per object; a group's members and an array's template under it, open.
 void SceneBuilder::refreshList() {
     const QSignalBlocker quiet(list_);
     const bool wasFilling = filling_;
     filling_ = true;
     list_->clear();
-    for (const Entity& e : graph_.entities) {
-        auto* item = new QTreeWidgetItem(list_);
-        item->setText(0, rolesText(e));
-        item->setIcon(0, shapeIcon(e.shape, 22));
-        item->setData(0, Qt::UserRole, e.id);
-        item->setIcon(1, controlIcon(e.visible ? ControlIcon::Visible : ControlIcon::Hidden, 18));
-        item->setIcon(2, controlIcon(e.locked ? ControlIcon::Locked : ControlIcon::Unlocked, 18));
+    std::map<uint32_t, QTreeWidgetItem*> rows;
+    std::map<uint32_t, uint32_t> under; // row id -> the row it hangs under
+    auto row = [&](const SceneObject& o, const QIcon& icon, const QString& text) {
+        auto* item = new QTreeWidgetItem;
+        item->setText(0, text);
+        item->setIcon(0, icon);
+        item->setData(0, Qt::UserRole, o.id);
+        item->setIcon(1, controlIcon(o.visible ? ControlIcon::Visible : ControlIcon::Hidden, 18));
+        item->setIcon(2, controlIcon(o.locked ? ControlIcon::Locked : ControlIcon::Unlocked, 18));
         item->setToolTip(1, "Видимость");
         item->setToolTip(2, "Замок: мышь не выделяет и не двигает");
-        if (!e.visible) item->setForeground(0, QColor(120, 124, 132)); // hidden: greyed
+        if (!o.visible) item->setForeground(0, QColor(120, 124, 132)); // hidden: greyed
+        rows[o.id] = item;
+        under[o.id] = o.parent;
+    };
+    for (const Group& g : graph_.groups) row(g, objectIcon(ObjectIcon::Group, 22), QString::fromStdString(g.name) + (g.glued ? " — склеено" : ""));
+    std::set<uint32_t> masters; // shapes that instances share
+    for (const Entity& e : graph_.entities)
+        if (masterOf(e.id) != e.id) masters.insert(masterOf(e.id));
+    for (const Entity& e : graph_.entities) {
+        const Entity r = resolveInstance(graph_, e);
+        const bool linked = masterOf(e.id) != e.id || masters.count(e.id);
+        row(e, shapeIcon(r.shape, 22), (linked ? "⧉ " : "") + rolesText(r) + (isHiddenTemplate(e) ? " (образец массива)" : ""));
     }
+    for (const ArrayObject& a : graph_.arrays) {
+        const ObjectIcon icon = a.pattern == ArrayPattern::Grid ? ObjectIcon::ArrayGrid : a.pattern == ArrayPattern::Circle ? ObjectIcon::ArrayCircle : ObjectIcon::ArrayLine;
+        row(a, objectIcon(icon, 22), objectTitle(a.id));
+        if (const Entity* t = entityById(a.templateId); t && isHiddenTemplate(*t) && !findObject(graph_, t->parent)) under[t->id] = a.id;
+    }
+    for (const Light& l : graph_.lights) row(l, sceneIcon(lightIcon(l.kind), 22), QString::fromStdString(l.name));
+    for (const Camera& c : graph_.cameras)
+        row(c, sceneIcon(SceneIcon::Camera, 22), QString::fromStdString(c.name) + (c.id == throughId_ ? " — вид через неё" : c.active ? " — активная" : ""));
+    for (auto& [id, item] : rows) {
+        const auto parent = rows.find(under[id]);
+        if (parent != rows.end() && parent->second != item) parent->second->addChild(item);
+        else list_->addTopLevelItem(item);
+    }
+    list_->expandAll();
     syncListSelection();
     filling_ = wasFilling;
 }
 
 // Only the components the object has get a card; the rigid card warns when there is no collider.
 void SceneBuilder::refreshSections() {
-    const Entity* e = selectedEntity();
-    for (int k = 0; k < int(RoleIcon::Count); ++k) cards_[k]->setVisible(e && roleEnabled(*e, RoleIcon(k)));
-    if (!e || !e->rigid.enabled || e->collider.enabled) {
+    const std::vector<RoleIcon> all = commonRoles();
+    for (int k = 0; k < int(RoleIcon::Count); ++k) cards_[k]->setVisible(std::find(all.begin(), all.end(), RoleIcon(k)) != all.end());
+    const Entity* e = selectedEntity() ? entityById(masterOf(selectedId_)) : nullptr;
+    if (!e || selection_.size() > 1 || !e->rigid.enabled || e->collider.enabled) {
         noCollider_->clearMessage();
         return;
     }
@@ -468,24 +581,36 @@ void SceneBuilder::refreshSections() {
                              [this] { toggleRole(RoleIcon::Collider); });
 }
 
+// The icon and name of the active object - or "3 объекта" -, and the components all of them have.
 void SceneBuilder::refreshHeader() {
-    const Entity* e = selectedEntity();
-    if (!e) return;
-    headerIcon_->setPixmap(shapeIcon(e->shape, 44).pixmap(44, 44));
-    headerName_->setText(QString::fromStdString(e->name));
+    const SceneObject* o = selectedObject();
+    if (!o) return;
+    const Entity* e = entityById(o->id);
+    const QIcon kind = kindIcon(o->id, 44); // a light or a camera
+    const QIcon icon = e ? shapeIcon(resolveInstance(graph_, *e).shape, 44)
+                         : !kind.isNull() ? kind : objectIcon(groupById(o->id) ? ObjectIcon::Group : ObjectIcon::ArrayLine, 44);
+    headerIcon_->setPixmap(icon.pixmap(44, 44));
+    headerName_->setText(selection_.size() > 1 ? "Выбрано: " + ruPlural(int(selection_.size()), "объект", "объекта", "объектов") : objectTitle(o->id));
     QLayout* chips = headerChips_->layout();
     while (QLayoutItem* it = chips->takeAt(0)) {
         delete it->widget();
         delete it;
     }
-    for (int k = 0; k < int(RoleIcon::Count); ++k) {
-        if (!roleEnabled(*e, RoleIcon(k))) continue;
+    for (RoleIcon role : commonRoles()) {
         auto* chip = new QLabel;
-        chip->setPixmap(rolePixmap(RoleIcon(k), 20));
-        chip->setToolTip(roleTitle(RoleIcon(k)));
+        chip->setPixmap(rolePixmap(role, 20));
+        chip->setToolTip(roleTitle(role));
         chips->addWidget(chip);
     }
-    if (chips->count() == 0) chips->addWidget(new QLabel("только геометрия — добавьте компонент"));
+    const bool shapes = e && selectedEntities().size() == selection_.size();
+    if (chips->count() == 0 && shapes) chips->addWidget(new QLabel(selection_.size() > 1 ? "общих компонентов нет — правка идёт всем сразу"
+                                                                                            : "только геометрия — добавьте компонент"));
+    else if (chips->count() == 0)
+        chips->addWidget(new QLabel(groupById(o->id)    ? "группа"
+                                    : arrayById(o->id)  ? "массив копий"
+                                    : lightById(o->id)  ? "свет — для глаза, физика его не видит"
+                                    : cameraById(o->id) ? "камера — через неё вид и скриншоты"
+                                                        : "разные объекты"));
     static_cast<QHBoxLayout*>(chips)->addStretch(1);
 }
 
@@ -493,7 +618,7 @@ void SceneBuilder::refreshHeader() {
 // it. Nothing is refused silently.
 void SceneBuilder::refreshBanner() {
     if (stickyBanner_) return; // a message about the whole scene stays until ▶
-    const Entity* e = selectedEntity();
+    const Entity* e = selectedEntity() ? entityById(masterOf(selectedId_)) : nullptr;
     if (!e) return banner_->clearMessage();
     if (e->flammable.enabled && !e->cloth.enabled)
         return banner_->showMessage("Гореть пока умеет только ткань.", e->shape == ShapeKind::Mesh ? QString() : "Сделать тканью",

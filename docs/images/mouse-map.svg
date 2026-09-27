@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="500" viewBox="0 0 960 500" role="img" aria-label="Мышь: схема «Простая»">
+  <title>Мышь: схема «Простая»</title>
+  <style>
+    .bg { fill: #16181f; }
+    .h1 { font: 700 26px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #eef0f5; }
+    .sub { font: 400 15px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #9aa0b0; }
+    .btn { font: 700 20px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
+    .t { font: 400 16px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #e3e6ee; }
+    .alt { font: 600 16px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #c9a8ff; }
+    .foot { font: 600 16px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #16181f; }
+    .lmb { fill: #4f8cff; } .rmb { fill: #3fbf7f; } .mmb { fill: #f5c542; }
+    .lmbT { fill: #6fa2ff; } .rmbT { fill: #5fd394; } .mmbT { fill: #f5c542; }
+    .lead { stroke-width: 2; fill: none; }
+  </style>
+  <rect class="bg" width="960" height="500" rx="16"/>
+
+  <text class="h1" x="36" y="50">Мышь: схема «Простая»</text>
+  <text class="sub" x="36" y="76">так по умолчанию · «Как в Blender» и «Как в Maya/Unity» — меню Вид → Управление</text>
+
+  <!-- the mouse -->
+  <rect x="405" y="118" width="150" height="240" rx="75" fill="#2a2e3a" stroke="#626879" stroke-width="3"/>
+  <path class="lmb" d="M478,121 A73,73 0 0 0 408,191 L408,212 L478,212 Z"/>
+  <path class="rmb" d="M482,121 A73,73 0 0 1 552,191 L552,212 L482,212 Z"/>
+  <rect class="mmb" x="469" y="140" width="22" height="50" rx="11" stroke="#16181f" stroke-width="3"/>
+  <line x1="472" y1="152" x2="488" y2="152" stroke="#8a6d10" stroke-width="2"/>
+  <line x1="472" y1="165" x2="488" y2="165" stroke="#8a6d10" stroke-width="2"/>
+  <line x1="472" y1="178" x2="488" y2="178" stroke="#8a6d10" stroke-width="2"/>
+  <text class="btn" x="440" y="206" text-anchor="middle" fill="#0f1a33">Л</text>
+  <text class="btn" x="520" y="206" text-anchor="middle" fill="#0d2a1b">П</text>
+
+  <!-- ЛКМ -->
+  <polyline class="lead" stroke="#4f8cff" points="420,170 380,170 380,140 360,140"/>
+  <text class="btn lmbT" x="36" y="146">ЛКМ</text>
+  <text class="t" x="36" y="176">щелчок — выбрать</text>
+  <text class="t" x="36" y="200">тянуть с пустого места — рамка</text>
+  <text class="t" x="36" y="224">тянуть ручку — гизмо</text>
+  <text class="alt" x="36" y="252">Alt + ЛКМ — вращать камеру</text>
+
+  <!-- ПКМ -->
+  <polyline class="lead" stroke="#3fbf7f" points="540,170 580,170 580,140 600,140"/>
+  <text class="btn rmbT" x="606" y="146">ПКМ</text>
+  <text class="t" x="606" y="176">тянуть — вращать вокруг точки</text>
+  <text class="t" x="606" y="198">под курсором</text>
+  <text class="t" x="606" y="224">щелчок — меню</text>
+  <text class="t" x="606" y="248">держать + W A S D — полёт</text>
+  <text class="t" x="606" y="270">(Q / E вниз / вверх, Shift — быстрее)</text>
+  <text class="alt" x="606" y="298">Alt + ПКМ — зум</text>
+
+  <!-- СКМ -->
+  <polyline class="lead" stroke="#f5c542" points="470,176 380,300 360,300"/>
+  <text class="btn mmbT" x="36" y="306">СКМ (нажать колесо)</text>
+  <text class="t" x="36" y="334">тянуть — панорама</text>
+  <text class="alt" x="36" y="360">Alt + СКМ — тоже панорама</text>
+
+  <!-- колесо -->
+  <polyline class="lead" stroke="#f5c542" points="491,150 590,340 600,340"/>
+  <text class="btn mmbT" x="606" y="346">Колесо</text>
+  <text class="t" x="606" y="374">крутить — зум к курсору</text>
+
+  <!-- footer -->
+  <rect x="36" y="410" width="888" height="62" rx="12" fill="#f5c542"/>
+  <text class="foot" x="480" y="436" text-anchor="middle">ЛКМ никогда не двигает камеру. Потерялись — нажмите F.</text>
+  <text class="foot" x="480" y="460" text-anchor="middle" style="font-weight:400">Alt-сочетания Maya, Unity, Unreal и Houdini работают без смены схемы.</text>
+</svg>

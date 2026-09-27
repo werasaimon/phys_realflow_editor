@@ -21,6 +21,9 @@ public:
     void setObject(const rf::SceneObject& o); // fills the fields; not an edit
     void writeTo(rf::SceneObject& o) const;  // the fields -> the object (id stays)
     void setPosition(const rf::Vector3& p); // live update while the mouse drags the object
+    // Several objects selected: an empty name and "—" in the numbers that differ between them
+    // (bit k of a mask: axis k). Call after setObject; an edit then goes only to what was changed.
+    void showMixed(bool name, int positionMask, int rotationMask);
 
 signals:
     void edited(); // any field changed by the user

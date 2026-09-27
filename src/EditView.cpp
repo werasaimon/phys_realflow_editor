@@ -41,9 +41,10 @@ bool rayTriangle(const Vector3& o, const Vector3& d, const Vector3& a, const Vec
 }
 
 const EditView::Source& EditView::source(const SceneGraph& g, const Entity& e) {
-    Source& s = cache_[e.id];
     const std::string key = sourceKey(e);
-    if (s.mesh && s.key == key) return s;
+    if (cache_.size() > 512 && !cache_.count(key)) cache_.clear(); // sizes left behind by scale drags
+    Source& s = cache_[key];
+    if (s.mesh) return s;
     s.key = key;
     s.mesh = std::make_shared<const TriMesh>(entityLocalMesh(e, g.baseDirectory));
     s.bounds = s.mesh->bounds();
@@ -61,8 +62,9 @@ std::shared_ptr<RenderSnapshot> EditView::snapshot(const SceneGraph& g, const st
     const Vector3 w = g.world.size;
     snap->domain = AABB({-0.5f * w.x, 0.0f, -0.5f * w.z}, {0.5f * w.x, w.y, 0.5f * w.z});
     snap->sceneName = name;
+    describeLights(g, *snap); // the scene's lights shade the authored scene as they will the played one
     bodyEntity.clear();
-    for (const Entity& e : g.entities) {
+    for (const Entity& e : worldEntities(g)) {
         if (!e.visible) continue;
         const Source& s = source(g, e);
         if (s.mesh->triangles.empty()) continue; // an unreadable model file
@@ -105,7 +107,7 @@ bool EditView::raycastLocal(const Source& s, const Vector3& o, const Vector3& d,
 
 std::vector<PickHit> EditView::pickAll(const SceneGraph& g, const Ray& ray) {
     std::vector<PickHit> hits;
-    for (const Entity& e : g.entities) {
+    for (const Entity& e : worldEntities(g)) {
         if (!e.visible || e.locked) continue;
         const Source& s = source(g, e);
         if (s.mesh->triangles.empty()) continue;

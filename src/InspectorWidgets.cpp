@@ -2,6 +2,7 @@
 #include "InspectorWidgets.h"
 
 #include <QBoxLayout>
+#include <QCheckBox>
 #include <QLabel>
 #include <QPushButton>
 #include <QSignalBlocker>
@@ -17,6 +18,30 @@ QDoubleSpinBox* makeSpin(double min, double max, double step, int decimals, cons
     s->setMinimumWidth(52);
     if (!suffix.isEmpty()) s->setSuffix(" " + suffix);
     return s;
+}
+
+// The special value text of a spin box is shown when it holds its minimum: the minimum is moved
+// one step below the real range for as long as the field is mixed (the real one kept in a property).
+void showMixed(QDoubleSpinBox* s) {
+    if (!s->property("realMinimum").isValid()) s->setProperty("realMinimum", s->minimum());
+    const QSignalBlocker quiet(s);
+    s->setMinimum(s->property("realMinimum").toDouble() - s->singleStep());
+    s->setSpecialValueText("—");
+    s->setValue(s->minimum());
+}
+
+void clearMixed(QWidget* panel) {
+    for (QDoubleSpinBox* s : panel->findChildren<QDoubleSpinBox*>()) {
+        if (!s->property("realMinimum").isValid()) continue;
+        const QSignalBlocker quiet(s);
+        s->setSpecialValueText(QString());
+        s->setMinimum(s->property("realMinimum").toDouble());
+    }
+    for (QCheckBox* c : panel->findChildren<QCheckBox*>()) {
+        if (!c->property("realText").isValid()) continue;
+        c->setText(c->property("realText").toString());
+        c->setProperty("realText", QVariant());
+    }
 }
 
 QLabel* sectionTitle(const QString& text) {

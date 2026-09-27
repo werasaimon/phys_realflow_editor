@@ -5,12 +5,16 @@
 //   OBJECTS      - an entity: a source with a pose and roles (what the gizmo and inspector edit);
 //   META-OBJECTS - what a role makes when the scene plays: a rigid body, a cloth, an emitter.
 // In edit mode only the first two exist, and this class shows them: one drawn body per visible
-// entity (its shape's mesh at its pose), and the mouse ray tested against that same mesh, so a
-// click selects exactly what is drawn under the cursor.
+// entity as the simulation would build it (rf::worldEntities: poses composed with their groups',
+// instances resolved to their master's geometry, every copy of every array), and the mouse ray
+// tested against that same mesh, so a click selects exactly what is drawn under the cursor. The id
+// of a drawn body is its entity's id, or for an array's copy rf::arrayCopyId(array, n).
+// The snapshot carries the scene's lights too (rf::describeLights): the edit view is lit as the
+// played scene will be. Lights and cameras themselves have no body (SceneMarkers.h draws them).
 //
-// Picking: the ray is taken into the entity's own frame (the mesh is cached there, rebuilt only
-// when the shape, size or model file changes), tested against the mesh's box first, then against
-// its triangles (Moller-Trumbore; a BVH for models of more than 2000 triangles). Nearest hit wins.
+// Picking: the ray is taken into the entity's own frame (the mesh is cached there by shape, size
+// and model file, so the 200 copies of an array share one), tested against the mesh's box first,
+// then against its triangles (Moller-Trumbore; a BVH for models of more than 2000 triangles).
 #include "OrbitCamera.h"
 #include "scene/SceneGraph.h"
 #include "scene/Simulation.h"
@@ -32,13 +36,13 @@ struct PickHit {
 
 class EditView {
 public:
-    // The snapshot the viewport draws in edit mode; bodyEntity[i] = id of the entity of body i.
+    // The snapshot the viewport draws in edit mode; bodyEntity[i] = the drawn id of body i.
     std::shared_ptr<rf::RenderSnapshot> snapshot(const rf::SceneGraph& g, const std::string& name,
                                                  std::vector<uint32_t>& bodyEntity);
-    // Every visible, unlocked entity the ray passes through, nearest first.
+    // Every visible, unlocked drawn entity the ray passes through, nearest first.
     std::vector<PickHit> pickAll(const rf::SceneGraph& g, const Ray& ray);
-    // The entity's box in the world (its mesh's box turned and moved).
-    rf::AABB worldBounds(const rf::SceneGraph& g, const rf::Entity& e);
+    // The box in the world of an entity posed in the world (one of rf::worldEntities).
+    rf::AABB worldBounds(const rf::SceneGraph& g, const rf::Entity& world);
 
 private:
     struct Source {
@@ -50,7 +54,7 @@ private:
     const Source& source(const rf::SceneGraph& g, const rf::Entity& e);
     bool raycastLocal(const Source& s, const rf::Vector3& o, const rf::Vector3& d, float& t) const;
 
-    std::map<uint32_t, Source> cache_; // by entity id
+    std::map<std::string, Source> cache_; // by shape, size and model file
 };
 
 // Moller-Trumbore ray / triangle: the distance t along the ray, false if missed or behind.

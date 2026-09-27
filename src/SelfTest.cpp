@@ -299,7 +299,11 @@ void testLiveEdit(Checker& c, QMainWindow& w, SceneBuilder& b, Viewport* v) {
     // simulated time) let the water land before the pause arrived.
     b.play();
     b.pause();
-    pump(200);
+    // The simulation's first picture, however busy the PC is (a fixed 200 ms was too short under load).
+    QElapsedTimer built;
+    built.start();
+    do pump(50);
+    while (v->snapshot()->particles.empty() && v->snapshot()->liquid.empty() && built.elapsed() < 15000);
     const size_t water = v->snapshot()->particles.size() + v->snapshot()->liquid.size();
     float waterLowest = 1e9f;
     for (const Vector3& p : v->snapshot()->liquid) waterLowest = std::min(waterLowest, p.y);
@@ -455,11 +459,14 @@ int runBuilderSelfTest(QMainWindow& w, const QString& shotsDir) {
     run("live", [&] { testLiveEdit(c, w, *b, v); });
     run("components", [&] { c.failures += runComponentTests(w, *b, v, shotsDir); });
     run("controls", [&] { c.failures += runControlTests(w, *b, v, shotsDir); });
-    if (!shotsDir.isEmpty()) {
-        QDir().mkpath(shotsDir);
+    if (!shotsDir.isEmpty()) QDir().mkpath(shotsDir);
+    run("many", [&] { c.failures += runManyTests(w, *b, v, shotsDir); });
+    run("lights", [&] { c.failures += runLightTests(w, *b, v, shotsDir); });
+    run("window", [&] { c.failures += runPlayTests(w, *b, v, shotsDir); });
+    if (!shotsDir.isEmpty()) run("shots", [&] {
         c.check(runGizmoShots(w, shotsDir) == 0, "screenshots of the gizmo");
         sceneShots(w, *b, v, shotsDir);
-    }
+    });
     std::printf(c.failures ? "%d FAILURE(S)\n" : "ALL PASSED\n", c.failures);
     return c.failures;
 }

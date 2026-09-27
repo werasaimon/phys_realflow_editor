@@ -1,9 +1,14 @@
 // The keys and the mouse schemes of the editor (see MainWindow.h and docs/controls.md): the "Правка"
 // menu holds every key as an action, so the key is written next to it in the menu and in its
 // tooltip; "Вид → Управление" switches the mouse scheme; the status bar says what the buttons do.
+// Many objects at once live here too: groups, arrays, instances, the selection helpers and the
+// "Клонировать" popover after a Shift + gizmo drag; and the cameras: "Вид → Камеры" (the editor's
+// view or a camera of the scene), Esc out of a camera. The toolbar is in MainWindowToolbar.cpp.
 #include "MainWindow.h"
 
+#include "ClonePopover.h"
 #include "ControlScheme.h"
+#include "RoleBar.h"
 #include "SceneBuilder.h"
 #include "Viewport.h"
 
@@ -16,7 +21,11 @@
 #include <QPushButton>
 #include <QSettings>
 #include <QStatusBar>
+#include <QToolBar>
+#include <QToolButton>
 #include <QVBoxLayout>
+
+#include <algorithm>
 
 namespace {
 
@@ -48,6 +57,12 @@ void MainWindow::buildEditMenu() {
     connect(keyAction(menu, "actionHide", "Скрыть выбранное", {QKeySequence(Qt::Key_H)}), &QAction::triggered, builder_, &SceneBuilder::hideSelected);
     connect(keyAction(menu, "actionUnhide", "Показать скрытое", {QKeySequence("Alt+H")}), &QAction::triggered, builder_, &SceneBuilder::unhideAll);
     menu->addSeparator();
+    connect(keyAction(menu, "actionGroup", "Сгруппировать", {QKeySequence("Ctrl+G")}), &QAction::triggered, builder_, &SceneBuilder::groupSelected);
+    connect(keyAction(menu, "actionUngroup", "Разгруппировать", {QKeySequence("Ctrl+Shift+G")}), &QAction::triggered, builder_,
+            &SceneBuilder::ungroupSelected);
+    connect(keyAction(menu, "actionMakeArray", "Сделать массивом…", {}), &QAction::triggered, builder_, &SceneBuilder::makeArrayOfSelected);
+    addSelectHelpers(menu);
+    menu->addSeparator();
     connect(keyAction(menu, "actionFrameSelected", "Показать выбранное (без выбора — всё)", {QKeySequence(Qt::Key_F)}), &QAction::triggered, this,
             [this] { builder_->showsSample() ? view_->frameScene() : builder_->frameSelected(); });
     connect(keyAction(menu, "actionFrameAll", "Показать всю сцену", {QKeySequence(Qt::Key_Home)}), &QAction::triggered, this,
@@ -56,10 +71,51 @@ void MainWindow::buildEditMenu() {
     auto* esc = keyAction(menu, "actionEscape", "Стоп / снять выделение", {QKeySequence(Qt::Key_Escape)});
     esc->setToolTip("Идёт симуляция — стоп и сцена как до ▶; в правке — снять выделение");
     connect(esc, &QAction::triggered, this, [this] {
-        if (builder_->showsSample() || !builder_->editing()) builder_->stop();
+        if (builder_->lookingThrough()) builder_->lookThrough(0); // first out of the camera, as Blender's Esc
+        else if (builder_->showsSample() || !builder_->editing()) builder_->stop();
         else builder_->select(0);
     });
     buildViewKeys(menu);
+}
+
+// What works on many objects at once: a group, an array, an instance's link. For the context menu.
+void MainWindow::addManyActions(QMenu* menu) {
+    const uint32_t id = builder_->selectedId();
+    const rf::SceneGraph& g = builder_->graph();
+    const bool group = std::any_of(g.groups.begin(), g.groups.end(), [id](const rf::Group& x) { return x.id == id; });
+    const bool array = std::any_of(g.arrays.begin(), g.arrays.end(), [id](const rf::ArrayObject& x) { return x.id == id; });
+    const bool shape = std::any_of(g.entities.begin(), g.entities.end(), [id](const rf::Entity& x) { return x.id == id; });
+    menu->addAction("Сгруппировать", QKeySequence("Ctrl+G"), builder_, &SceneBuilder::groupSelected);
+    if (group) menu->addAction("Разгруппировать", QKeySequence("Ctrl+Shift+G"), builder_, &SceneBuilder::ungroupSelected);
+    if (shape) menu->addAction(objectIcon(ObjectIcon::ArrayLine, 20), "Сделать массивом…", builder_, &SceneBuilder::makeArrayOfSelected);
+    if (array) menu->addAction("Разобрать на объекты", this, [this, id] { builder_->explodeArray(id); });
+    if (shape && builder_->masterOf(id) != id) menu->addAction("Отвязать экземпляр", this, [this, id] { builder_->unlinkInstance(id); });
+}
+
+// "Выбрать все такие же", "Выбрать все с компонентом ▸", "Инвертировать выбор".
+void MainWindow::addSelectHelpers(QMenu* menu) {
+    QAction* similar = menu->addAction("Выбрать все такие же", builder_, &SceneBuilder::selectSimilar);
+    similar->setObjectName("actionSelectSimilar");
+    similar->setToolTip("Та же форма с теми же компонентами, или экземпляры того же образца");
+    QMenu* byRole = menu->addMenu("Выбрать все с компонентом");
+    byRole->setObjectName("menuSelectByRole");
+    for (int k = 0; k < int(RoleIcon::Count); ++k) {
+        const RoleIcon role = RoleIcon(k);
+        byRole->addAction(roleIcon(role, 20), roleTitle(role), this, [this, role] { builder_->selectWithRole(role); });
+    }
+    menu->addAction("Инвертировать выбор", builder_, &SceneBuilder::invertSelection)->setObjectName("actionInvertSelection");
+}
+
+// After a Shift + gizmo drag: how many copies, and of what kind (ClonePopover.h).
+void MainWindow::showClonePopover(const QPointF& pos) {
+    if (!builder_->clonePending()) return;
+    auto* popover = new ClonePopover(this);
+    popover->allowKinds(builder_->cloneAllows(SceneBuilder::CloneKind::Instance), builder_->cloneAllows(SceneBuilder::CloneKind::Array));
+    connect(popover, &ClonePopover::accepted, builder_, [this](int copies, int kind) {
+        builder_->finishClone(copies, SceneBuilder::CloneKind(kind));
+    });
+    connect(popover, &ClonePopover::cancelled, builder_, &SceneBuilder::cancelClone);
+    popover->popup(view_->mapToGlobal(pos.toPoint()));
 }
 
 // The axis views (numpad, Ctrl: the opposite side) and the gizmo's size (+ / -).
@@ -166,4 +222,24 @@ void MainWindow::connectViewportControls() {
     statusBar()->addWidget(hintLabel_, 1);
     connect(view_, &Viewport::hintChanged, hintLabel_, &QLabel::setText);
     hintLabel_->setText(view_->mouseHint());
+}
+
+// Вид -> Камеры: the editor's own view, then every camera of the scene; the one looked through is ticked.
+void MainWindow::buildCamerasMenu() {
+    QMenu* menu = menuBar()->findChild<QMenu*>("viewMenu")->addMenu(sceneIcon(SceneIcon::Camera, 20), "Камеры");
+    menu->setObjectName("camerasMenu");
+    connect(menu, &QMenu::aboutToShow, this, [this, menu] {
+        menu->clear();
+        QAction* editor = menu->addAction("Вид редактора", this, [this] { builder_->lookThrough(0); });
+        editor->setCheckable(true);
+        editor->setChecked(builder_->lookingThrough() == 0);
+        menu->addSeparator();
+        for (const rf::Camera& c : builder_->graph().cameras) {
+            const uint32_t id = c.id;
+            QAction* a = menu->addAction(sceneIcon(SceneIcon::Camera, 20), QString::fromStdString(c.name), this, [this, id] { builder_->lookThrough(id); });
+            a->setCheckable(true);
+            a->setChecked(builder_->lookingThrough() == id);
+        }
+        if (builder_->graph().cameras.empty()) menu->addAction("Камер нет — «Камера» на панели сверху")->setEnabled(false);
+    });
 }

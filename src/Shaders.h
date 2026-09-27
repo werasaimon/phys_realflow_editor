@@ -46,12 +46,14 @@ void main() {
     vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
     uv = p;
     gl_Position = vec4(p * 2.0 - 1.0, 0.9999, 1.0);
-})";
+}
+)";
 static const char* kBgFS = R"(in vec2 uv; out vec4 o;
 void main() {
     vec3 top = vec3(0.17, 0.19, 0.23), bot = vec3(0.06, 0.07, 0.09);
     o = vec4(mix(bot, top, uv.y), 1.0);
-})";
+}
+)";
 
 // Selection outlines: the selected (red channel), hovered (green) and role-less (blue) objects are
 // drawn flat into a mask; this pass lights the pixels just outside each silhouette - within uRadius
@@ -77,9 +79,15 @@ void main() {
     if (edge.r > 0.0) c = vec4(uSelected.rgb, uSelected.a * edge.r);
     if (c.a <= 0.003) discard;
     o = c;
-})";
+}
+)";
 
 // Lit meshes: the obstacle, rigid bodies, cloth; also the glass vessel (uAlpha < 1).
+// Lighting: the scene's own lights when it has any (RenderSnapshot::lights: one sun and up to eight
+// lamps and spotlights, all in view space) - Lambert diffuse, a soft Blinn-Phong highlight, a lamp
+// fading quadratically to nothing at its range, a spotlight's cone with a smooth edge, the sun's
+// shadow from a shadow map (3 x 3 PCF) - over a constant ambient. No lights: the viewer's own light
+// from the top left and a head light, as before.
 static const char* kMeshVS = R"(in vec3 aPos;
 in vec3 aNormal;
 in float aScalar;
@@ -91,12 +99,49 @@ void main() {
     vN = mat3(uView) * mat3(uModel) * aNormal;
     vS = aScalar;
     gl_Position = uProj * vp;
-})";
+}
+)";
 static const char* kMeshFS = R"(
 in vec3 vN; in vec3 vPosV; in float vS;
 uniform vec3 uColor; uniform int uUseScalar; uniform float uMin, uMax; uniform int uCmap;
 uniform float uAlpha = 1.0; // < 1: glass (drawn blended, after the volume)
+uniform int uLightCount;     // lamps and spotlights, up to 8
+uniform vec3 uLightPos[8], uLightDir[8], uLightColor[8]; // uLightDir: where it shines; colour * intensity
+uniform float uLightRange[8], uLightCosOuter[8], uLightCosInner[8]; // a lamp: cosines -2 and -1 (no cone)
+uniform int uSunOn; uniform vec3 uSunDir, uSunColor; // uSunDir: towards the sun
+uniform int uShadowOn; uniform sampler2D uShadowMap; uniform mat4 uShadowFromView; uniform float uShadowTexel;
 out vec4 o;
+// How much of the sun reaches this point: the fraction of 3 x 3 shadow-map texels it is in front of.
+float sunLit() {
+    if (uShadowOn == 0) return 1.0;
+    vec4 s = uShadowFromView * vec4(vPosV, 1.0);
+    vec3 p = s.xyz / s.w;
+    if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z > 1.0) return 1.0;
+    float lit = 0.0;
+    for (int i = -1; i <= 1; ++i)
+        for (int j = -1; j <= 1; ++j) lit += p.z - 0.003 <= texture(uShadowMap, p.xy + vec2(i, j) * uShadowTexel).r ? 1.0 : 0.0;
+    return lit / 9.0;
+}
+vec3 oneLight(vec3 base, vec3 n, vec3 v, vec3 l, vec3 radiance) {
+    float diff = max(dot(n, l), 0.0);
+    float spec = diff > 0.0 ? pow(max(dot(n, normalize(l + v)), 0.0), 32.0) * 0.25 : 0.0;
+    return (base * diff * 0.8 + vec3(spec)) * radiance;
+}
+vec3 sceneLights(vec3 base, vec3 n, vec3 v) {
+    vec3 c = base * (0.18 + 0.1 * max(dot(n, v), 0.0)); // the ambient stays
+    if (uSunOn == 1) c += oneLight(base, n, v, uSunDir, uSunColor) * sunLit();
+    for (int i = 0; i < 8; ++i) {
+        if (i >= uLightCount) break;
+        vec3 toLight = uLightPos[i] - vPosV;
+        float d = length(toLight);
+        vec3 l = toLight / max(d, 1e-5);
+        float x = clamp(d / uLightRange[i], 0.0, 1.0);
+        float fade = (1.0 - x * x) * (1.0 - x * x);
+        float cone = smoothstep(uLightCosOuter[i], uLightCosInner[i], dot(-l, uLightDir[i]));
+        c += oneLight(base, n, v, l, uLightColor[i]) * fade * cone;
+    }
+    return c;
+}
 void main() {
     vec3 n = normalize(vN);
     vec3 v = normalize(-vPosV);
@@ -116,10 +161,19 @@ void main() {
     vec3 h = normalize(l + v);
     float spec = pow(max(dot(n, h), 0.0), 48.0) * 0.3;
     vec3 c = base * (0.18 + 0.55 * diff + 0.35 * fill) + vec3(spec) + ember;
+    if (uLightCount > 0 || uSunOn == 1) c = sceneLights(base, n, v) + ember;
     // Glass: the rim (grazing view) is brighter, the face almost clear (Schlick's Fresnel).
     float alpha = uAlpha < 1.0 ? uAlpha + (1.0 - uAlpha) * pow(1.0 - max(dot(n, v), 0.0), 4.0) : 1.0;
     o = vec4(c, alpha);
-})";
+}
+)";
+
+// The sun's shadow map: the depth of every body as the sun sees it (nothing else is written).
+static const char* kShadowVS = R"(in vec3 aPos;
+uniform mat4 uLightVP, uModel;
+void main() { gl_Position = uLightVP * uModel * vec4(aPos, 1.0); })";
+static const char* kShadowFS = R"(out vec4 o;
+void main() { o = vec4(1.0); })";
 
 // Particles as sphere impostors (point sprites shaded as spheres).
 static const char* kSphereVS = R"(in vec3 aPos;
@@ -137,7 +191,8 @@ void main() {
     vCol = aColor;
     gl_Position = uProj * vp;
     gl_PointSize = max(2.0, 2.0 * vRad * uPointScale / max(-vp.z, 1e-3));
-})";
+}
+)";
 static const char* kSphereFS = R"(
 in vec3 vCenter; in float vRad; in float vS; in vec3 vCol;
 uniform mat4 uProj; uniform int uUseScalar; uniform float uMin, uMax; uniform int uCmap;
@@ -157,7 +212,8 @@ void main() {
     vec3 h = normalize(l + vec3(0, 0, 1));
     float spec = pow(max(dot(n, h), 0.0), 40.0) * 0.35;
     o = vec4(base * (0.25 + 0.5 * diff + 0.3 * n.z) + vec3(spec), 1.0);
-})";
+}
+)";
 
 // A magnetised sphere drawn as an Earth-like planet (procedural - no image files): oceans and
 // continents from fractal noise on the sphere, ice caps, drifting clouds, the day side facing the
@@ -223,7 +279,8 @@ void main() {
     float curtain = 0.5 + 0.5 * sin(atan(n.z, n.x) * 14.0 + uTime * 1.3 + 6.0 * noise(n * 8.0 + vec3(uTime * 0.3)));
     col += vec3(0.25, 1.0, 0.45) * oval * curtain * (1.0 - 0.7 * day) * 1.4;
     o = vec4(col, 1.0);
-})";
+}
+)";
 
 // Lines: streamlines, field lines, joints, the domain box.
 static const char* kLineVS = R"(in vec3 aPos;
@@ -237,7 +294,8 @@ uniform vec4 uColor; uniform int uUseScalar; uniform float uMin, uMax; uniform i
 out vec4 o;
 void main() {
     o = uUseScalar == 1 ? vec4(cmap(uCmap, (vS - uMin) / max(uMax - uMin, 1e-6)), uColor.a) : uColor;
-})";
+}
+)";
 
 // A coloured slice of a grid field.
 static const char* kSliceVS = R"(in vec3 aPos;
@@ -253,7 +311,8 @@ void main() {
     vec2 t = texture(uTex, vUV).rg;
     if (t.g > 0.5) { o = vec4(0.22, 0.23, 0.26, 1.0); return; }
     o = vec4(cmap(uCmap, (t.r - uMin) / max(uMax - uMin, 1e-6)), uAlpha);
-})";
+}
+)";
 
 // The smoke / fire / plasma volume: ray marching through the 3D texture against the scene depth.
 static const char* kVolVS = R"(in vec3 aPos;
@@ -337,4 +396,5 @@ void main() {
     // The flame's light is added over what lies behind (premultiplied blending), tone-mapped so
     // that the hot core saturates to white-yellow instead of clipping.
     o = vec4(acc.rgb + (vec3(1.0) - exp(-glow)), acc.a);
-})";
+}
+)";

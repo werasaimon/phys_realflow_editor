@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="500" viewBox="0 0 960 500" role="img" aria-label="Shift-клонирование">
+  <title>Shift + гизмо = клонировать</title>
+  <defs>
+    <marker id="dim" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 Z" fill="#f5c542"/></marker>
+    <marker id="ax" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto"><path d="M0,0 L10,5 L0,10 Z" fill="#ff5a5a"/></marker>
+    <g id="cube">
+      <path d="M0,-30 L34,-14 L34,26 L0,42 L-34,26 L-34,-14 Z" fill="#35578f"/>
+      <path d="M0,2 L34,-14 L34,26 L0,42 Z" fill="#2a4675"/>
+      <path d="M0,-30 L34,-14 L0,2 L-34,-14 Z" fill="#4d74b3"/>
+    </g>
+  </defs>
+  <style>
+    .bg { fill: #16181f; }
+    .card { fill: #1f222b; stroke: #333846; stroke-width: 1.5; }
+    .h1 { font: 700 26px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #eef0f5; }
+    .sub { font: 400 15px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #9aa0b0; }
+    .t { font: 400 15px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #e3e6ee; }
+    .tb { font: 700 15px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #eef0f5; }
+    .d { font: 700 16px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #f5c542; text-anchor: middle; }
+    .cap { font: 400 14px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #9aa0b0; text-anchor: middle; }
+    .step { font: 700 15px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #ffffff; text-anchor: middle; }
+    .pop { font: 400 14px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #e3e6ee; }
+  </style>
+  <rect class="bg" width="960" height="500" rx="16"/>
+  <text class="h1" x="36" y="50">Shift + гизмо = клонировать</text>
+  <text class="sub" x="36" y="76">Shift зажат в момент, когда вы хватаете ручку гизмо (нажат позже — просто «точнее»)</text>
+
+  <!-- steps -->
+  <g>
+    <circle cx="50" cy="112" r="14" fill="#ff4d6d"/><text class="step" x="50" y="117">1</text>
+    <text class="t" x="72" y="117">зажмите Shift и тяните ручку</text>
+    <circle cx="330" cy="112" r="14" fill="#ff4d6d"/><text class="step" x="330" y="117">2</text>
+    <text class="t" x="352" y="117">отпустите — появится окошко</text>
+    <circle cx="610" cy="112" r="14" fill="#ff4d6d"/><text class="step" x="610" y="117">3</text>
+    <text class="t" x="632" y="117">сколько копий и какие — OK</text>
+  </g>
+
+  <!-- floor and cubes -->
+  <rect class="card" x="36" y="140" width="600" height="250" rx="14"/>
+  <line x1="60" y1="306" x2="612" y2="306" stroke="#454b5c" stroke-width="2"/>
+  <use href="#cube" x="110" y="262"/>
+  <use href="#cube" x="240" y="262" opacity="0.9"/>
+  <use href="#cube" x="370" y="262" opacity="0.9"/>
+  <use href="#cube" x="500" y="262" opacity="0.9"/>
+  <path d="M500,264 L570,264" stroke="#ff5a5a" stroke-width="4" marker-end="url(#ax)"/>
+  <circle cx="500" cy="264" r="5" fill="none" stroke="#ffffff" stroke-width="2"/>
+  <text class="cap" x="110" y="330">оригинал</text>
+  <text class="cap" x="240" y="330">копия 1</text>
+  <text class="cap" x="370" y="330">копия 2</text>
+  <text class="cap" x="500" y="330">копия 3</text>
+  <!-- distances: every copy is measured from the original -->
+  <line x1="110" y1="164" x2="110" y2="226" stroke="#f5c542" stroke-width="1" opacity="0.6"/>
+  <line x1="110" y1="222" x2="240" y2="222" stroke="#f5c542" stroke-width="2" marker-start="url(#dim)" marker-end="url(#dim)"/>
+  <text class="d" x="175" y="214">d</text>
+  <line x1="110" y1="196" x2="370" y2="196" stroke="#f5c542" stroke-width="2" marker-start="url(#dim)" marker-end="url(#dim)"/>
+  <text class="d" x="240" y="188">2d</text>
+  <line x1="110" y1="170" x2="500" y2="170" stroke="#f5c542" stroke-width="2" marker-start="url(#dim)" marker-end="url(#dim)"/>
+  <text class="d" x="305" y="162">3d</text>
+  <text class="cap" x="336" y="366">каждая копия повторяет шаг: d, 2d, 3d…</text>
+
+  <!-- popover mock -->
+  <rect x="664" y="140" width="260" height="250" rx="10" fill="#23262f" stroke="#454b5c" stroke-width="1.5"/>
+  <text class="tb" x="684" y="170">Клонировать</text>
+  <text class="pop" x="684" y="204">Сколько копий</text>
+  <rect x="800" y="186" width="100" height="28" rx="5" fill="#16181f" stroke="#4f8cff" stroke-width="2"/>
+  <text class="pop" x="812" y="206">3</text>
+  <circle cx="692" cy="240" r="7" fill="none" stroke="#9aa0b0" stroke-width="2"/><circle cx="692" cy="240" r="3.5" fill="#e3e6ee"/>
+  <text class="pop" x="708" y="245">Копия — независимые</text>
+  <circle cx="692" cy="272" r="7" fill="none" stroke="#9aa0b0" stroke-width="2"/>
+  <text class="pop" x="708" y="277">Экземпляр — общие настройки</text>
+  <circle cx="692" cy="304" r="7" fill="none" stroke="#9aa0b0" stroke-width="2"/>
+  <text class="pop" x="708" y="309">Массив — один объект</text>
+  <rect x="684" y="340" width="104" height="30" rx="5" fill="#2c4a80" stroke="#4f8cff" stroke-width="1.5"/>
+  <text class="pop" x="736" y="360" text-anchor="middle">OK · Enter</text>
+  <rect x="800" y="340" width="104" height="30" rx="5" fill="#2e3240" stroke="#5d6377" stroke-width="1.5"/>
+  <text class="pop" x="852" y="360" text-anchor="middle">Отмена · Esc</text>
+
+  <!-- rotate / scale -->
+  <rect class="card" x="36" y="408" width="888" height="72" rx="14"/>
+  <text class="tb" x="58" y="438">Так же с другими ручками:</text>
+  <text class="t" x="58" y="464">сдвиг d → d, 2d, 3d   ·   поворот a → a, 2a, 3a вокруг центра гизмо   ·   масштаб s → s, s², s³</text>
+  <text class="t" x="660" y="438" fill="#9aa0b0">всё клонирование — один Ctrl+Z</text>
+</svg>

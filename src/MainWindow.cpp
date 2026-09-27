@@ -1,4 +1,12 @@
+// The main window (see MainWindow.h): the 3D view in the middle, the scene builder on the right,
+// the solver parameters and the visualisation on the left under "Эксперт", the readings and plots
+// at the bottom under "Графики". This file builds the actions, the menus, the parameter forms and
+// the docks, and runs the automation of the command line (a scene, frames, a screenshot, a CSV).
+// Other parts of the window live in MainWindowStart.cpp (the first minute), MainWindowControls.cpp
+// (keys, mouse schemes, many objects), MainWindowToolbar.cpp (the top bar) and MainWindowPlay.cpp
+// (the play banner, K, Ctrl+K, the white-window check).
 #include "MainWindow.h"
+#include "RuPlural.h"
 
 #include "ParamForm.h"
 #include "RoleBar.h"
@@ -77,6 +85,8 @@ MainWindow::MainWindow() {
     buildSceneMenu();
     buildEditMenu();
     buildControlsMenu();
+    buildCamerasMenu();
+    buildPlayExtras();
     connectViewportControls();
     setExpertMode(false);   // a beginner's screen: the builder and a big 3D view
     setGraphsVisible(false);
@@ -136,6 +146,12 @@ MainWindow::~MainWindow() {
 // Toolbar & menu
 // ---------------------------------------------------------------------------
 void MainWindow::buildActions() {
+    buildRunActions();
+    buildMenus();
+}
+
+// Пуск, Пауза, Стоп, Шаг: the actions the toolbar, the menu and the big buttons on the view share.
+void MainWindow::buildRunActions() {
     // Edit -> play -> stop, as in a game engine: the builder's scene is only simulated while it plays.
     playAct_ = new QAction(controlIcon(ControlIcon::Play, 48), "Пуск", this);
     playAct_->setShortcut(Qt::Key_Space);
@@ -154,7 +170,10 @@ void MainWindow::buildActions() {
     stepAct_->setShortcut(Qt::Key_Period);
     stepAct_->setToolTip("Один кадр (.)");
     connect(stepAct_, &QAction::triggered, this, [this] { builder_->step(); });
+}
 
+// The menu bar: Файл (import, export, screenshot), Симуляция, Вид (filled later), Справка.
+void MainWindow::buildMenus() {
     auto* importAct = new QAction(style()->standardIcon(QStyle::SP_DialogOpenButton), "Импорт модели…", this);
     importAct->setShortcut(QKeySequence("Ctrl+I")); // Ctrl+O opens a scene (menu "Сцена")
     connect(importAct, &QAction::triggered, this, &MainWindow::importMesh);
@@ -170,7 +189,6 @@ void MainWindow::buildActions() {
 
     buildSamplesMenu();
 
-
     auto* file = menuBar()->addMenu("&Файл");
     file->addAction(importAct);
     file->addAction(csvAct);
@@ -180,6 +198,7 @@ void MainWindow::buildActions() {
     file->addAction("Выход", QKeySequence::Quit, this, &QWidget::close);
 
     auto* sim = menuBar()->addMenu("&Симуляция");
+    sim->setObjectName("simulationMenu");
     for (QAction* a : {playAct_, pauseAct_, stopAct_, stepAct_}) sim->addAction(a);
     auto* rt = sim->addAction("Не быстрее реального времени");
     rt->setCheckable(true);
@@ -191,6 +210,7 @@ void MainWindow::buildActions() {
     viewMenu->addSeparator();
 
     auto* help = menuBar()->addMenu("&Справка");
+    help->setObjectName("helpMenu");
     help->addAction("Управление и методы", QKeySequence::HelpContents, this, &MainWindow::showHelp);
     help->addAction("О программе", this, &MainWindow::showAbout);
 }
@@ -227,8 +247,8 @@ void MainWindow::buildLayoutActions() {
     connect(expertAct_, &QAction::toggled, this, &MainWindow::setExpertMode);
     graphsAct_ = new QAction("Графики", this);
     graphsAct_->setCheckable(true);
-    graphsAct_->setShortcut(QKeySequence("Ctrl+G"));
-    graphsAct_->setToolTip("Показания и графики внизу (Ctrl+G); без них главные числа — в строке состояния");
+    graphsAct_->setShortcut(QKeySequence("F9")); // Ctrl+G is Group, as in Maya
+    graphsAct_->setToolTip("Показания и графики внизу (F9); без них главные числа — в строке состояния");
     connect(graphsAct_, &QAction::toggled, this, &MainWindow::setGraphsVisible);
     collidersAct_ = new QAction(roleIcon(RoleIcon::Collider, 20), "Коллайдеры", this);
     collidersAct_->setCheckable(true);
@@ -279,13 +299,14 @@ void MainWindow::onModeChanged() {
     for (QAction* a : toolGroup_->actions()) a->setEnabled(gizmo);
     localAct_->setEnabled(gizmo);
     status_->setText(modeText());
+    updatePlayOverlay();
 }
 
 // The right click of the edit mode, as the quad menu of 3ds Max: an object under the cursor that is
 // not selected is selected first (the same click rules), then the menu opens at the cursor.
 void MainWindow::showEditContextMenu(const QPointF& pos) {
     const uint32_t under = view_->pickEntity(view_->camera().screenRay(pos, view_->size()));
-    if (under && under != builder_->selectedId()) view_->clickSelect(pos, false);
+    if (under && !builder_->drawnSelected(under)) view_->clickSelect(pos, false);
     QMenu* menu = buildEditContextMenu();
     menu->exec(view_->mapToGlobal(pos.toPoint()));
     menu->deleteLater();
@@ -312,16 +333,21 @@ QMenu* MainWindow::buildEditContextMenu() {
 
 void MainWindow::addObjectActions(QMenu* menu) {
     const uint32_t id = builder_->selectedId();
-    const rf::Entity* e = nullptr;
-    for (const rf::Entity& x : builder_->graph().entities)
-        if (x.id == id) e = &x;
-    if (!e) return;
-    menu->addSection(QString::fromStdString(e->name));
+    const rf::SceneObject* o = builder_->object(id);
+    if (!o) return;
+    const int n = int(builder_->selection().size());
+    menu->addSection(n > 1 ? "Выбрано: " + ruPlural(n, "объект", "объекта", "объектов") : builder_->objectTitle(id));
     menu->addAction("Показать", QKeySequence(Qt::Key_F), this, [this] { builder_->frameSelected(); });
     menu->addAction("Дублировать", duplicateAct_->shortcut(), this, [this] { builder_->duplicateSelected(); });
     menu->addAction("Удалить", deleteAct_->shortcut(), this, [this] { builder_->removeSelected(); });
-    menu->addAction(e->visible ? "Скрыть" : "Показать объект", QKeySequence(Qt::Key_H), this, [this, id] { builder_->toggleVisible(id); });
-    menu->addAction(e->locked ? "Разблокировать" : "Заблокировать", this, [this, id] { builder_->toggleLocked(id); });
+    menu->addAction(o->visible ? "Скрыть" : "Показать объект", QKeySequence(Qt::Key_H), this, [this, id] { builder_->toggleVisible(id); });
+    menu->addAction(o->locked ? "Разблокировать" : "Заблокировать", this, [this, id] { builder_->toggleLocked(id); });
+    addManyActions(menu);
+    addSelectHelpers(menu);
+    const rf::Entity* e = nullptr;
+    for (const rf::Entity& x : builder_->graph().entities)
+        if (x.id == builder_->masterOf(id)) e = &x;
+    if (!e) return; // a group or an array has no components of its own
     QMenu* roles = menu->addMenu(roleIcon(RoleIcon::Rigid, 20), "Роль");
     for (int k = 0; k < int(RoleIcon::Count); ++k) {
         const RoleIcon role = RoleIcon(k);
@@ -532,7 +558,13 @@ ParamForm* MainWindow::buildGasForm() {
                [](Simulation& s, bool v) { s.gasPushesBodies = v; },
                "Давление газа и архимедова сила на твёрдые тела. Тела всегда вытесняют газ; "
                "с плотностью воздуха 1.2 кг/м³ обратное влияние слабое — увеличьте плотность среды");
+    addGasExpertRows(f);
+    return f;
+}
 
+// The gas form's rows under "Эксперт": the source's place and strength, dissipation, the medium,
+// the box and its faces, and the pressure solver.
+void MainWindow::addGasExpertRows(ParamForm* f) {
     f->beginAdvanced();
     for (int a = 0; a < 3; ++a) {
         const char* names[3] = {"Источник X", "Источник Y", "Источник Z"};
@@ -579,7 +611,6 @@ ParamForm* MainWindow::buildGasForm() {
                [](Simulation& s, bool v) { s.grid.params.smokeRake = v; });
     f->addBool("Cd/Cl по площади в плане", [](const Snap& s) { return s.gasParams.usePlanformArea; },
                [](Simulation& s, bool v) { s.grid.params.usePlanformArea = v; }, "Иначе — по площади миделя");
-    return f;
 }
 
 ParamForm* MainWindow::buildBrushForm() {
@@ -626,147 +657,120 @@ static AABB bodyArea(const Simulation& s) {
     return AABB({-2, 0, -2}, {2, 5, 2});
 }
 
-ParamForm* MainWindow::buildRigidForm() {
-    auto* f = new ParamForm(ctrl_.get());
+// Where the body buttons drop a new body: high in the body area, a little to one side (a fixed
+// seed: the same sequence every run).
+static Vector3 bodySpawnPos(Simulation& s) {
+    static std::mt19937 rng(42);
+    std::uniform_real_distribution<float> U(-0.3f, 0.3f);
+    AABB d = bodyArea(s);
+    Vector3 c = d.center(), e = d.extent();
+    return Vector3(c.x + U(rng) * e.x, d.hi.y - 0.15f * e.y, c.z + U(rng) * e.z);
+}
+
+// Where the soft-body and cloth buttons drop theirs: near the top of the particles' box.
+static Vector3 particleSpawnTop(Simulation& s) {
+    static std::mt19937 rng(7);
+    std::uniform_real_distribution<float> U(-0.3f, 0.3f);
+    AABB d = s.particles.domain();
+    Vector3 c = d.center(), e = d.extent();
+    return Vector3(c.x + U(rng) * e.x, d.hi.y - 0.2f * e.y, c.z + 0.3f * U(rng) * e.z);
+}
+
+// A row of buttons in the form, and a button in a row that runs `job` on the simulation's thread.
+static QHBoxLayout* buttonRow(ParamForm* f) {
     auto* row = new QWidget;
     auto* h = new QHBoxLayout(row);
     h->setContentsMargins(0, 0, 0, 0);
-    auto* bSphere = new QPushButton("+ Шар");
-    auto* bBox = new QPushButton("+ Куб");
-    auto* bThrow = new QPushButton("Бросить");
-    auto* bBullet = new QPushButton("Пуля");
-    bBullet->setToolTip("Маленький шар на 150 м/с — проверка CCD");
-    auto* bHull = new QPushButton("+ Многогранник");
-    bHull->setToolTip("Выпуклый многогранник (цилиндр/конус/гранёный шар по очереди); столкновения через GJK-EPA");
-    auto* bTeapot = new QPushButton("+ Чайник");
-    auto* bBunny = new QPushButton("+ Кролик");
-    bTeapot->setToolTip("Невыпуклое тело: чайник, разбитый на выпуклые части");
-    bBunny->setToolTip("Невыпуклое тело: кролик, разбитый на выпуклые части");
-    h->addWidget(bSphere);
-    h->addWidget(bBox);
-    h->addWidget(bHull);
-    h->addWidget(bBullet);
-    connect(bBullet, &QPushButton::clicked, this, [this] {
-        ctrl_->post([](Simulation& s) {
-            AABB d = bodyArea(s);
-            Vector3 e = d.extent();
-            int i = s.rigid.addSphere({d.lo.x + 0.05f * e.x, d.lo.y + 0.3f * e.y, d.center().z}, 0.03f, 8000.0f, {1.0f, 0.95f, 0.4f});
-            s.rigid.bodies()[i].vel = {150.0f, 0.0f, 0.0f};
-        });
-    });
-    h->addWidget(bThrow);
-    auto spawnPos = [](Simulation& s) {
-        static std::mt19937 rng(42);
-        std::uniform_real_distribution<float> U(-0.3f, 0.3f);
-        AABB d = bodyArea(s);
-        Vector3 c = d.center(), e = d.extent();
-        return Vector3(c.x + U(rng) * e.x, d.hi.y - 0.15f * e.y, c.z + U(rng) * e.z);
-    };
-    connect(bSphere, &QPushButton::clicked, this, [this, spawnPos] {
-        ctrl_->post([spawnPos](Simulation& s) {
-            s.rigid.addSphere(spawnPos(s), s.mode() == SimMode::Rigid ? 0.2f : s.mode() == SimMode::Fluid ? 0.08f : 0.12f, 500.0f, {0.9f, 0.35f, 0.3f});
-        });
-    });
-    connect(bBox, &QPushButton::clicked, this, [this, spawnPos] {
-        ctrl_->post([spawnPos](Simulation& s) {
-            float hh = s.mode() == SimMode::Rigid ? 0.18f : s.mode() == SimMode::Fluid ? 0.07f : 0.11f;
-            s.rigid.addBox(spawnPos(s), Vector3(hh), Quaternion::fromAxisAngle({1, 1, 0.3f}, 0.8f), 500.0f, {0.3f, 0.7f, 0.9f});
-        });
-    });
-    connect(bHull, &QPushButton::clicked, this, [this, spawnPos] {
-        ctrl_->post([spawnPos](Simulation& s) {
-            static int k = 0;
-            const int kind = k++ % 3; // cylinder, cone, faceted ball in turn
-            float sc = s.mode() == SimMode::Rigid ? 1.0f : s.mode() == SimMode::Fluid ? 0.5f : 0.7f;
-            TriMesh m = kind == 0   ? primitives::cylinder(0.14f * sc, 0.3f * sc, 12)
-                        : kind == 1 ? primitives::cone(0.16f * sc, 0.35f * sc, 12)
-                                    : primitives::sphere(0.16f * sc, 8, 5);
-            s.rigid.addConvex(m, spawnPos(s), Quaternion::fromAxisAngle({1, 0.3f, 0.2f}, 0.9f), 600.0f, {0.8f, 0.8f, 0.3f});
-        });
-    });
-    connect(bTeapot, &QPushButton::clicked, this, [this, spawnPos] {
-        ctrl_->post([spawnPos](Simulation& s) {
-            s.rigid.addCompound(teapotShape(), spawnPos(s), Quaternion::fromAxisAngle({0.3f, 1, 0.2f}, 0.7f), 500.0f,
-                                {0.8f, 0.55f, 0.85f});
-        });
-    });
-    connect(bBunny, &QPushButton::clicked, this, [this, spawnPos] {
-        ctrl_->post([spawnPos](Simulation& s) {
-            s.rigid.addCompound(bunnyShape(), spawnPos(s), Quaternion::fromAxisAngle({0, 1, 0}, 0.5f), 500.0f,
-                                {0.92f, 0.9f, 0.86f});
-        });
-    });
-    connect(bThrow, &QPushButton::clicked, this, [this] {
-        ctrl_->post([](Simulation& s) {
-            AABB d = bodyArea(s);
-            Vector3 e = d.extent();
-            int i = s.rigid.addSphere({d.lo.x + 0.1f * e.x, d.lo.y + 0.7f * e.y, d.center().z},
-                                      s.mode() == SimMode::Rigid ? 0.22f : s.mode() == SimMode::Fluid ? 0.07f : 0.12f, 3000.0f, {0.95f, 0.8f, 0.2f});
-            s.rigid.bodies()[i].vel = Vector3(1.8f * e.x, 0.3f * e.y, 0.0f);
-        });
-    });
     f->addRow(row);
-    auto* row2 = new QWidget;
-    auto* h2 = new QHBoxLayout(row2);
-    h2->setContentsMargins(0, 0, 0, 0);
-    h2->addWidget(bTeapot);
-    h2->addWidget(bBunny);
-    f->addRow(row2);
-    // Soft bodies and cloth: the particle system runs in every mode (liquid, gas, rigid).
-    auto* softRow = new QWidget;
-    auto* sh = new QHBoxLayout(softRow);
-    sh->setContentsMargins(0, 0, 0, 0);
-    auto* bSoftCube = new QPushButton("+ Мягкий куб");
-    auto* bSoftBall = new QPushButton("+ Желе-шар");
-    auto* bCloth = new QPushButton("+ Ткань");
-    bSoftCube->setToolTip("Поролон 150 кг/м³: частицы, форма держится сопоставлением формы (Müller 2005)");
-    bSoftBall->setToolTip("Мягкий шар: низкая жёсткость формы");
-    bCloth->setToolTip("Свободный лоскут хлопка 0.3 кг/м² (XPBD): падает, ложится на всё, рвётся по нитям");
-    auto* bWater = new QPushButton("+ Вода");
-    bWater->setToolTip("Объём воды (частицы PBF) сверху: в режиме газа она связана с воздухом");
-    sh->addWidget(bWater);
-    sh->addWidget(bSoftCube);
-    sh->addWidget(bSoftBall);
-    sh->addWidget(bCloth);
-    connect(bWater, &QPushButton::clicked, this, [this] {
-        ctrl_->post([](Simulation& s) {
-            AABB d = s.particles.domain();
-            Vector3 c = d.center(), e = d.extent();
-            s.particles.addBlock(AABB({c.x - 0.12f * e.x, d.hi.y - 0.4f * e.y, c.z - 0.25f * e.z},
-                                      {c.x + 0.12f * e.x, d.hi.y - 0.1f * e.y, c.z + 0.25f * e.z}));
-        });
+    return h;
+}
+
+void MainWindow::addJobButton(QHBoxLayout* row, const QString& text, const QString& tip, std::function<void(Simulation&)> job) {
+    auto* b = new QPushButton(text);
+    if (!tip.isEmpty()) b->setToolTip(tip);
+    row->addWidget(b);
+    connect(b, &QPushButton::clicked, this, [this, job] { ctrl_->post(job); });
+}
+
+ParamForm* MainWindow::buildRigidForm() {
+    auto* f = new ParamForm(ctrl_.get());
+    addBodyButtons(f);
+    addSoftButtons(f);
+    f->beginAdvanced();
+    addRigidSolverRows(f);
+    return f;
+}
+
+// Rigid bodies: a ball, a box, a convex hull, a bullet for the CCD, a throw; the concave teapot and bunny.
+void MainWindow::addBodyButtons(ParamForm* f) {
+    QHBoxLayout* h = buttonRow(f);
+    addJobButton(h, "+ Шар", {}, [](Simulation& s) {
+        s.rigid.addSphere(bodySpawnPos(s), s.mode() == SimMode::Rigid ? 0.2f : s.mode() == SimMode::Fluid ? 0.08f : 0.12f, 500.0f, {0.9f, 0.35f, 0.3f});
     });
-    auto top = [](Simulation& s) {
-        static std::mt19937 rng(7);
-        std::uniform_real_distribution<float> U(-0.3f, 0.3f);
+    addJobButton(h, "+ Куб", {}, [](Simulation& s) {
+        float hh = s.mode() == SimMode::Rigid ? 0.18f : s.mode() == SimMode::Fluid ? 0.07f : 0.11f;
+        s.rigid.addBox(bodySpawnPos(s), Vector3(hh), Quaternion::fromAxisAngle({1, 1, 0.3f}, 0.8f), 500.0f, {0.3f, 0.7f, 0.9f});
+    });
+    addJobButton(h, "+ Многогранник", "Выпуклый многогранник (цилиндр/конус/гранёный шар по очереди); столкновения через GJK-EPA",
+                 [](Simulation& s) {
+                     static int k = 0;
+                     const int kind = k++ % 3; // cylinder, cone, faceted ball in turn
+                     float sc = s.mode() == SimMode::Rigid ? 1.0f : s.mode() == SimMode::Fluid ? 0.5f : 0.7f;
+                     TriMesh m = kind == 0   ? primitives::cylinder(0.14f * sc, 0.3f * sc, 12)
+                                 : kind == 1 ? primitives::cone(0.16f * sc, 0.35f * sc, 12)
+                                             : primitives::sphere(0.16f * sc, 8, 5);
+                     s.rigid.addConvex(m, bodySpawnPos(s), Quaternion::fromAxisAngle({1, 0.3f, 0.2f}, 0.9f), 600.0f, {0.8f, 0.8f, 0.3f});
+                 });
+    addJobButton(h, "Пуля", "Маленький шар на 150 м/с — проверка CCD", [](Simulation& s) {
+        AABB d = bodyArea(s);
+        Vector3 e = d.extent();
+        int i = s.rigid.addSphere({d.lo.x + 0.05f * e.x, d.lo.y + 0.3f * e.y, d.center().z}, 0.03f, 8000.0f, {1.0f, 0.95f, 0.4f});
+        s.rigid.bodies()[i].vel = {150.0f, 0.0f, 0.0f};
+    });
+    addJobButton(h, "Бросить", {}, [](Simulation& s) {
+        AABB d = bodyArea(s);
+        Vector3 e = d.extent();
+        int i = s.rigid.addSphere({d.lo.x + 0.1f * e.x, d.lo.y + 0.7f * e.y, d.center().z},
+                                  s.mode() == SimMode::Rigid ? 0.22f : s.mode() == SimMode::Fluid ? 0.07f : 0.12f, 3000.0f, {0.95f, 0.8f, 0.2f});
+        s.rigid.bodies()[i].vel = Vector3(1.8f * e.x, 0.3f * e.y, 0.0f);
+    });
+    QHBoxLayout* h2 = buttonRow(f);
+    addJobButton(h2, "+ Чайник", "Невыпуклое тело: чайник, разбитый на выпуклые части", [](Simulation& s) {
+        s.rigid.addCompound(teapotShape(), bodySpawnPos(s), Quaternion::fromAxisAngle({0.3f, 1, 0.2f}, 0.7f), 500.0f, {0.8f, 0.55f, 0.85f});
+    });
+    addJobButton(h2, "+ Кролик", "Невыпуклое тело: кролик, разбитый на выпуклые части", [](Simulation& s) {
+        s.rigid.addCompound(bunnyShape(), bodySpawnPos(s), Quaternion::fromAxisAngle({0, 1, 0}, 0.5f), 500.0f, {0.92f, 0.9f, 0.86f});
+    });
+}
+
+// Soft bodies and cloth: the particle system runs in every mode (liquid, gas, rigid).
+void MainWindow::addSoftButtons(ParamForm* f) {
+    QHBoxLayout* sh = buttonRow(f);
+    addJobButton(sh, "+ Вода", "Объём воды (частицы PBF) сверху: в режиме газа она связана с воздухом", [](Simulation& s) {
         AABB d = s.particles.domain();
         Vector3 c = d.center(), e = d.extent();
-        return Vector3(c.x + U(rng) * e.x, d.hi.y - 0.2f * e.y, c.z + 0.3f * U(rng) * e.z);
-    };
-    connect(bSoftCube, &QPushButton::clicked, this, [this, top] {
-        ctrl_->post([top](Simulation& s) {
-            TriMesh m = primitives::box(Vector3(0.08f));
-            m.translate(top(s));
-            s.particles.addSoftBody(m, 150.0f, 0.4f, {0.3f, 0.75f, 0.95f});
-        });
+        s.particles.addBlock(AABB({c.x - 0.12f * e.x, d.hi.y - 0.4f * e.y, c.z - 0.25f * e.z},
+                                  {c.x + 0.12f * e.x, d.hi.y - 0.1f * e.y, c.z + 0.25f * e.z}));
     });
-    connect(bSoftBall, &QPushButton::clicked, this, [this, top] {
-        ctrl_->post([top](Simulation& s) {
-            TriMesh m = primitives::sphere(0.08f, 16, 8);
-            m.translate(top(s));
-            s.particles.addSoftBody(m, 150.0f, 0.15f, {0.55f, 0.9f, 0.35f});
-        });
+    addJobButton(sh, "+ Мягкий куб", "Поролон 150 кг/м³: частицы, форма держится сопоставлением формы (Müller 2005)", [](Simulation& s) {
+        TriMesh m = primitives::box(Vector3(0.08f));
+        m.translate(particleSpawnTop(s));
+        s.particles.addSoftBody(m, 150.0f, 0.4f, {0.3f, 0.75f, 0.95f});
     });
-    connect(bCloth, &QPushButton::clicked, this, [this, top] {
-        ctrl_->post([top](Simulation& s) {
-            Vector3 p = top(s);
-            ClothMaterial cotton; // defaults: cotton, tears at ~4 kN/m
-            s.particles.addCloth(p - Vector3(0.2f, 0, 0.2f), {0.4f, 0, 0}, {0, 0, 0.4f}, cotton, 0, {0.9f, 0.85f, 0.75f});
-        });
+    addJobButton(sh, "+ Желе-шар", "Мягкий шар: низкая жёсткость формы", [](Simulation& s) {
+        TriMesh m = primitives::sphere(0.08f, 16, 8);
+        m.translate(particleSpawnTop(s));
+        s.particles.addSoftBody(m, 150.0f, 0.15f, {0.55f, 0.9f, 0.35f});
     });
-    f->addRow(softRow);
+    addJobButton(sh, "+ Ткань", "Свободный лоскут хлопка 0.3 кг/м² (XPBD): падает, ложится на всё, рвётся по нитям", [](Simulation& s) {
+        Vector3 p = particleSpawnTop(s);
+        ClothMaterial cotton; // defaults: cotton, tears at ~4 kN/m
+        s.particles.addCloth(p - Vector3(0.2f, 0, 0.2f), {0.4f, 0, 0}, {0, 0, 0.4f}, cotton, 0, {0.9f, 0.85f, 0.75f});
+    });
+}
 
-    f->beginAdvanced();
+// The rigid solver's rows under "Эксперт".
+void MainWindow::addRigidSolverRows(ParamForm* f) {
     f->addCombo("Решатель", {"XPBD (Müller 2020, эксперим.)", "Импульсы + ударная волна"},
                 [](const Snap& s) { return int(s.rigid.solver); },
                 [](Simulation& s, int v) {
@@ -803,7 +807,6 @@ ParamForm* MainWindow::buildRigidForm() {
     f->addDouble("Гравитация g", -30, 30, 0.5, 2, [](const Snap& s) { return -s.rigid.gravity.y; },
                  [](Simulation& s, double v) { s.setGravity({0.0f, float(-v), 0.0f}); s.touchParams(); }, "Одна для всей сцены",
                  "м/с²");
-    return f;
 }
 
 void MainWindow::buildParameterDock() {
@@ -881,7 +884,14 @@ void MainWindow::connectSceneBuilder() {
     connect(builder_, &SceneBuilder::sceneryBodies, view_, &Viewport::setSceneryBodies);
     connect(builder_, &SceneBuilder::frameRequested, this, [this](const rf::AABB& box) {
         view_->setFocusBox(box);
-        view_->frameScene();
+        if (!view_->lookingThrough()) view_->frameScene(); // through a camera, framing would move the camera
+    });
+    connect(builder_, &SceneBuilder::sceneMarkers, view_, &Viewport::setSceneMarkers);
+    connect(builder_, &SceneBuilder::cameraView, view_, &Viewport::setLookThrough);
+    connect(view_, &Viewport::lookThroughMoved, builder_, &SceneBuilder::onViewMovedThroughCamera);
+    builder_->setViewEye([this] {
+        const QVector3D e = view_->camera().eye();
+        return rf::Vector3(e.x(), e.y(), e.z());
     });
     connect(view_, &Viewport::bodyClicked, builder_, &SceneBuilder::selectBody);
     connect(view_, &Viewport::entityClicked, builder_, &SceneBuilder::onEntityClicked);
@@ -890,6 +900,8 @@ void MainWindow::connectSceneBuilder() {
     connect(view_, &Viewport::gizmoMoved, builder_, &SceneBuilder::onGizmoMoved);
     connect(view_, &Viewport::gizmoFinished, builder_, &SceneBuilder::onGizmoFinished);
     connect(view_, &Viewport::gizmoCancelled, builder_, &SceneBuilder::onGizmoCancelled);
+    connect(view_, &Viewport::cloneDragStarted, builder_, &SceneBuilder::onCloneDragStarted);
+    connect(view_, &Viewport::cloneDragFinished, this, &MainWindow::showClonePopover);
     connect(view_, &Viewport::editContextMenu, this, &MainWindow::showEditContextMenu);
     // What the mouse ray hits: the authored shapes in edit mode, the simulated bodies on pause.
     view_->setEditPicker([this](const Ray& ray) {
@@ -897,54 +909,14 @@ void MainWindow::connectSceneBuilder() {
         std::vector<PickHit> hits;
         int body;
         rf::Vector3 hit;
-        if (view_->pickAnyBody(ray, body, hit) && builder_->entityOfBody(body))
-            hits.push_back({builder_->entityOfBody(body), rf::length(hit - ray.origin), hit, ""});
+        if (view_->pickAnyBody(ray, body, hit) && builder_->clickTarget(builder_->entityOfBody(body)))
+            hits.push_back({builder_->clickTarget(builder_->entityOfBody(body)), rf::length(hit - ray.origin), hit, ""});
         return hits;
     });
     connect(builder_, &SceneBuilder::selectionChanged, this, [this](uint32_t id) {
         if (id != 0) inspectorTabs_->setCurrentIndex(1); // selecting shows the object
     });
     connect(builder_, &SceneBuilder::colliderGuides, view_, &Viewport::setColliderGuides);
-}
-
-// The big bar on top: what you can create, then run / step / back to the start, then undo / redo,
-// and the ready-made scenes at the right end.
-void MainWindow::buildMainToolbar() {
-    auto* tb = new QToolBar("Создать", this);
-    createBar_ = tb;
-    tb->setObjectName("createBar");
-    tb->setMovable(false);
-    tb->setIconSize(QSize(48, 48));
-    tb->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-    addToolBar(Qt::TopToolBarArea, tb);
-    for (QAction* a : builder_->createActions()) tb->addAction(a);
-    auto* modelAct = tb->addAction(shapeIcon(rf::ShapeKind::Mesh, 48), "Модель");
-    modelAct->setToolTip("Модель из файла OBJ / STL: только форма, роль — плитками справа");
-    connect(modelAct, &QAction::triggered, this, &MainWindow::importModel);
-    tb->addSeparator();
-    for (QAction* a : {playAct_, pauseAct_, stopAct_, stepAct_}) tb->addAction(a);
-    tb->addSeparator();
-    tb->addAction(builder_->undoAction());
-    tb->addAction(builder_->redoAction());
-    auto* spacer = new QWidget;
-    spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    tb->addWidget(spacer);
-    // Compact text buttons at the right end: the ready-made scenes, the graphs, the expert panels.
-    auto compact = [tb](QToolButton* b) {
-        b->setObjectName("compactButton");
-        b->setToolButtonStyle(Qt::ToolButtonTextOnly);
-        tb->addWidget(b);
-    };
-    auto* samplesButton = new QToolButton;
-    samplesButton->setText("Примеры");
-    samplesButton->setToolTip("Все готовые сцены картинками: вода, огонь, плазма, токамак, уроки… Нажмите — откроется");
-    connect(samplesButton, &QToolButton::clicked, this, &MainWindow::openGallery);
-    compact(samplesButton);
-    for (QAction* a : {collidersAct_, graphsAct_, expertAct_}) {
-        auto* b = new QToolButton;
-        b->setDefaultAction(a);
-        compact(b);
-    }
 }
 
 void MainWindow::buildSceneMenu() {
@@ -986,109 +958,120 @@ void MainWindow::buildVisualDock() {
     auto* col = new QVBoxLayout(host);
     col->setContentsMargins(6, 6, 6, 6);
 
-    {
-        auto* f = new ParamForm(ctrl_.get());
-        f->addCombo("Поле", kFields, [](const Snap& s) { return int(s.vis.sliceField); },
-                    [](Simulation& s, int v) { s.vis.sliceField = GridField(v); });
-        f->addCombo("Сечение ⟂ оси", {"X", "Y", "Z"}, [](const Snap& s) { return s.vis.sliceAxis; },
-                    [](Simulation& s, int v) { s.vis.sliceAxis = v; });
-        f->addSlider("Положение", 0, 1, 200, [](const Snap& s) { return s.vis.slicePosition; },
-                     [](Simulation& s, double v) { s.vis.slicePosition = float(v); });
-        f->addBool("Цветное сечение поля", [](const Snap& s) { return s.vis.showSlice; },
-                   [](Simulation& s, bool v) { s.vis.showSlice = v; });
-        f->addBool("Дым (объёмный рендер)", [](const Snap& s) { return s.vis.showSmoke; },
-                   [](Simulation& s, bool v) { s.vis.showSmoke = v; });
-        f->addBool("Силовые линии магнитного поля", [](const Snap& s) { return s.vis.showFieldLines; },
-                   [](Simulation& s, bool v) { s.vis.showFieldLines = v; });
-        f->addCombo("Сетка вокселей", {"Скрыть", "В плоскости сечения", "Вся 3D-сетка"},
-                    [](const Snap& s) { return s.vis.gridDisplay; }, [](Simulation& s, int v) { s.vis.gridDisplay = v; },
-                    "Границы ячеек расчётной сетки");
-        f->addCombo("Векторы скорости", {"Скрыть", "В плоскости сечения", "Во всём объёме"},
-                    [](const Snap& s) { return s.vis.vectorDisplay; }, [](Simulation& s, int v) { s.vis.vectorDisplay = v; },
-                    "Стрелка в центре ячейки: скорость, усреднённая по граням MAC-ячейки");
-
-        f->beginAdvanced();
-        f->addInt("Прореживание векторов", 1, 16, [](const Snap& s) { return s.vis.vectorStride; },
-                  [](Simulation& s, int v) { s.vis.vectorStride = v; }, "Каждая n-я ячейка", "яч.");
-        f->addDouble("Длина векторов", 0.1, 10, 0.1, 2, [](const Snap& s) { return s.vis.vectorScale; },
-                     [](Simulation& s, double v) { s.vis.vectorScale = float(v); });
-        f->addBool("Векторы только в дыму", [](const Snap& s) { return s.vis.vectorsWhereSmoke; },
-                   [](Simulation& s, bool v) { s.vis.vectorsWhereSmoke = v; });
-        f->addBool("Линии тока", [](const Snap& s) { return s.vis.showStreamlines; },
-                   [](Simulation& s, bool v) { s.vis.showStreamlines = v; });
-        f->addInt("Густота линий тока", 2, 40, [](const Snap& s) { return s.vis.streamlineSeeds; },
-                  [](Simulation& s, int v) { s.vis.streamlineSeeds = v; });
-        f->addBool("Cp на поверхности тела", [](const Snap& s) { return s.vis.surfacePressure; },
-                   [](Simulation& s, bool v) { s.vis.surfacePressure = v; });
-        f->addBool("Автодиапазон шкалы", [](const Snap& s) { return s.vis.autoRange; },
-                   [](Simulation& s, bool v) { s.vis.autoRange = v; });
-        f->addDouble("Минимум шкалы", -1e6, 1e6, 0.1, 3, [](const Snap& s) { return s.vis.rangeMin; },
-                     [](Simulation& s, double v) { s.vis.rangeMin = float(v); s.vis.autoRange = false; s.touchParams(); });
-        f->addDouble("Максимум шкалы", -1e6, 1e6, 0.1, 3, [](const Snap& s) { return s.vis.rangeMax; },
-                     [](Simulation& s, double v) { s.vis.rangeMax = float(v); s.vis.autoRange = false; s.touchParams(); });
-        auto* smoke = new QDoubleSpinBox;
-        smoke->setRange(0.5, 100);
-        smoke->setValue(16);
-        connect(smoke, &QDoubleSpinBox::valueChanged, view_, [this](double v) { view_->setSmokeDensity(float(v)); });
-        f->addRow("Плотность дыма (рендер)", smoke);
-        auto* alpha = new QDoubleSpinBox;
-        alpha->setRange(0.1, 1);
-        alpha->setSingleStep(0.05);
-        alpha->setValue(0.92);
-        connect(alpha, &QDoubleSpinBox::valueChanged, view_, [this](double v) { view_->setSliceOpacity(float(v)); });
-        f->addRow("Непрозрачность сечения", alpha);
-        fieldBox_ = addGroup(col, "Поле течения", f);
-    }
-    {
-        auto* f = new ParamForm(ctrl_.get());
-        f->addCombo("Цвет частиц", {"Скорость", "Плотность", "Однотонный"},
-                    [](const Snap& s) { return int(s.vis.particleColoring); },
-                    [](Simulation& s, int v) { s.vis.particleColoring = ParticleColoring(v); });
-        f->beginAdvanced();
-        auto* pscale = new QDoubleSpinBox;
-        pscale->setRange(0.2, 3.0);
-        pscale->setSingleStep(0.1);
-        pscale->setValue(1.0);
-        connect(pscale, &QDoubleSpinBox::valueChanged, view_, [this](double v) { view_->setParticleScale(float(v)); });
-        f->addRow("Размер частиц", pscale);
-        particleBox_ = addGroup(col, "Частицы", f);
-    }
-    {
-        auto* f = new ParamForm(ctrl_.get());
-        auto* cmap = new QComboBox;
-        cmap->addItems({"Turbo", "Viridis", "Холодный–тёплый", "Оттенки серого"});
-        connect(cmap, &QComboBox::currentIndexChanged, view_, &Viewport::setColormap);
-        f->addRow("Палитра", cmap);
-        auto* parts = new QCheckBox("Выпуклые части тел");
-        parts->setToolTip("Показывать невыпуклые тела как набор выпуклых оболочек, с которыми работает коллизия");
-        connect(parts, &QCheckBox::toggled, view_, &Viewport::setShowConvexParts);
-        f->addRow(parts);
-        // Liquid exists in every mode (pool scenes, water in the gas): the switch is always shown.
-        f->addBool("Поверхность воды (шейдер)", [](const Snap& s) { return s.vis.liquidSurface; },
-                   [](Simulation& s, bool v) { s.vis.liquidSurface = v; });
-        f->beginAdvanced();
-        auto* dom = new QCheckBox("Границы области");
-        dom->setChecked(true);
-        connect(dom, &QCheckBox::toggled, view_, &Viewport::setShowDomain);
-        f->addRow(dom);
-        auto* floor = new QCheckBox("Сетка пола");
-        floor->setChecked(true);
-        connect(floor, &QCheckBox::toggled, view_, &Viewport::setShowFloor);
-        f->addRow(floor);
-        // The engine's debug drawing (Probe::line / point / box from any solver): contact points
-        // and normals, body bounds ... Off, it costs the solvers one flag test.
-        auto* dbg = new QCheckBox("Отладочная отрисовка (Probe)");
-        dbg->setToolTip("Точки и нормали контактов, границы тел и всё, что решатели рисуют через rf::Probe");
-        connect(dbg, &QCheckBox::toggled, this, [](bool on) { Probe::enableDraw(on); });
-        f->addRow(dbg);
-        addGroup(col, "Отображение", f);
-    }
+    buildFieldView(col);
+    buildParticleView(col);
+    buildDisplayView(col);
     col->addStretch(1);
     scroll->setWidget(host);
     scroll->setMinimumWidth(290);
     dock->setWidget(scroll);
     addDockWidget(Qt::RightDockWidgetArea, dock);
     menuBar()->findChild<QMenu*>("viewMenu")->addAction(dock->toggleViewAction());
+}
+
+// The flow field: which field, the slice, smoke, field lines, the voxel grid and the velocity
+// arrows; under "Эксперт" the arrows' density and length, streamlines, Cp, the colour scale.
+void MainWindow::buildFieldView(QVBoxLayout* col) {
+    auto* f = new ParamForm(ctrl_.get());
+    f->addCombo("Поле", kFields, [](const Snap& s) { return int(s.vis.sliceField); },
+                [](Simulation& s, int v) { s.vis.sliceField = GridField(v); });
+    f->addCombo("Сечение ⟂ оси", {"X", "Y", "Z"}, [](const Snap& s) { return s.vis.sliceAxis; },
+                [](Simulation& s, int v) { s.vis.sliceAxis = v; });
+    f->addSlider("Положение", 0, 1, 200, [](const Snap& s) { return s.vis.slicePosition; },
+                 [](Simulation& s, double v) { s.vis.slicePosition = float(v); });
+    f->addBool("Цветное сечение поля", [](const Snap& s) { return s.vis.showSlice; },
+               [](Simulation& s, bool v) { s.vis.showSlice = v; });
+    f->addBool("Дым (объёмный рендер)", [](const Snap& s) { return s.vis.showSmoke; },
+               [](Simulation& s, bool v) { s.vis.showSmoke = v; });
+    f->addBool("Силовые линии магнитного поля", [](const Snap& s) { return s.vis.showFieldLines; },
+               [](Simulation& s, bool v) { s.vis.showFieldLines = v; });
+    f->addCombo("Сетка вокселей", {"Скрыть", "В плоскости сечения", "Вся 3D-сетка"},
+                [](const Snap& s) { return s.vis.gridDisplay; }, [](Simulation& s, int v) { s.vis.gridDisplay = v; },
+                "Границы ячеек расчётной сетки");
+    f->addCombo("Векторы скорости", {"Скрыть", "В плоскости сечения", "Во всём объёме"},
+                [](const Snap& s) { return s.vis.vectorDisplay; }, [](Simulation& s, int v) { s.vis.vectorDisplay = v; },
+                "Стрелка в центре ячейки: скорость, усреднённая по граням MAC-ячейки");
+
+    f->beginAdvanced();
+    f->addInt("Прореживание векторов", 1, 16, [](const Snap& s) { return s.vis.vectorStride; },
+              [](Simulation& s, int v) { s.vis.vectorStride = v; }, "Каждая n-я ячейка", "яч.");
+    f->addDouble("Длина векторов", 0.1, 10, 0.1, 2, [](const Snap& s) { return s.vis.vectorScale; },
+                 [](Simulation& s, double v) { s.vis.vectorScale = float(v); });
+    f->addBool("Векторы только в дыму", [](const Snap& s) { return s.vis.vectorsWhereSmoke; },
+               [](Simulation& s, bool v) { s.vis.vectorsWhereSmoke = v; });
+    f->addBool("Линии тока", [](const Snap& s) { return s.vis.showStreamlines; },
+               [](Simulation& s, bool v) { s.vis.showStreamlines = v; });
+    f->addInt("Густота линий тока", 2, 40, [](const Snap& s) { return s.vis.streamlineSeeds; },
+              [](Simulation& s, int v) { s.vis.streamlineSeeds = v; });
+    f->addBool("Cp на поверхности тела", [](const Snap& s) { return s.vis.surfacePressure; },
+               [](Simulation& s, bool v) { s.vis.surfacePressure = v; });
+    f->addBool("Автодиапазон шкалы", [](const Snap& s) { return s.vis.autoRange; },
+               [](Simulation& s, bool v) { s.vis.autoRange = v; });
+    f->addDouble("Минимум шкалы", -1e6, 1e6, 0.1, 3, [](const Snap& s) { return s.vis.rangeMin; },
+                 [](Simulation& s, double v) { s.vis.rangeMin = float(v); s.vis.autoRange = false; s.touchParams(); });
+    f->addDouble("Максимум шкалы", -1e6, 1e6, 0.1, 3, [](const Snap& s) { return s.vis.rangeMax; },
+                 [](Simulation& s, double v) { s.vis.rangeMax = float(v); s.vis.autoRange = false; s.touchParams(); });
+    auto* smoke = new QDoubleSpinBox;
+    smoke->setRange(0.5, 100);
+    smoke->setValue(16);
+    connect(smoke, &QDoubleSpinBox::valueChanged, view_, [this](double v) { view_->setSmokeDensity(float(v)); });
+    f->addRow("Плотность дыма (рендер)", smoke);
+    auto* alpha = new QDoubleSpinBox;
+    alpha->setRange(0.1, 1);
+    alpha->setSingleStep(0.05);
+    alpha->setValue(0.92);
+    connect(alpha, &QDoubleSpinBox::valueChanged, view_, [this](double v) { view_->setSliceOpacity(float(v)); });
+    f->addRow("Непрозрачность сечения", alpha);
+    fieldBox_ = addGroup(col, "Поле течения", f);
+}
+
+// The particles: their colour, and under "Эксперт" their drawn size.
+void MainWindow::buildParticleView(QVBoxLayout* col) {
+    auto* f = new ParamForm(ctrl_.get());
+    f->addCombo("Цвет частиц", {"Скорость", "Плотность", "Однотонный"},
+                [](const Snap& s) { return int(s.vis.particleColoring); },
+                [](Simulation& s, int v) { s.vis.particleColoring = ParticleColoring(v); });
+    f->beginAdvanced();
+    auto* pscale = new QDoubleSpinBox;
+    pscale->setRange(0.2, 3.0);
+    pscale->setSingleStep(0.1);
+    pscale->setValue(1.0);
+    connect(pscale, &QDoubleSpinBox::valueChanged, view_, [this](double v) { view_->setParticleScale(float(v)); });
+    f->addRow("Размер частиц", pscale);
+    particleBox_ = addGroup(col, "Частицы", f);
+}
+
+// The display: the palette, convex parts, the water surface; under "Эксперт" the box, the floor
+// grid and the engine's debug drawing.
+void MainWindow::buildDisplayView(QVBoxLayout* col) {
+    auto* f = new ParamForm(ctrl_.get());
+    auto* cmap = new QComboBox;
+    cmap->addItems({"Turbo", "Viridis", "Холодный–тёплый", "Оттенки серого"});
+    connect(cmap, &QComboBox::currentIndexChanged, view_, &Viewport::setColormap);
+    f->addRow("Палитра", cmap);
+    auto* parts = new QCheckBox("Выпуклые части тел");
+    parts->setToolTip("Показывать невыпуклые тела как набор выпуклых оболочек, с которыми работает коллизия");
+    connect(parts, &QCheckBox::toggled, view_, &Viewport::setShowConvexParts);
+    f->addRow(parts);
+    // Liquid exists in every mode (pool scenes, water in the gas): the switch is always shown.
+    f->addBool("Поверхность воды (шейдер)", [](const Snap& s) { return s.vis.liquidSurface; },
+               [](Simulation& s, bool v) { s.vis.liquidSurface = v; });
+    f->beginAdvanced();
+    auto* dom = new QCheckBox("Границы области");
+    dom->setChecked(true);
+    connect(dom, &QCheckBox::toggled, view_, &Viewport::setShowDomain);
+    f->addRow(dom);
+    auto* floor = new QCheckBox("Сетка пола");
+    floor->setChecked(true);
+    connect(floor, &QCheckBox::toggled, view_, &Viewport::setShowFloor);
+    f->addRow(floor);
+    // The engine's debug drawing (Probe::line / point / box from any solver): contact points
+    // and normals, body bounds ... Off, it costs the solvers one flag test.
+    auto* dbg = new QCheckBox("Отладочная отрисовка (Probe)");
+    dbg->setToolTip("Точки и нормали контактов, границы тел и всё, что решатели рисуют через rf::Probe");
+    connect(dbg, &QCheckBox::toggled, this, [](bool on) { Probe::enableDraw(on); });
+    f->addRow(dbg);
+    addGroup(col, "Отображение", f);
 }
 
 // ---------------------------------------------------------------------------
@@ -1274,13 +1257,17 @@ QImage MainWindow::windowImage() {
     QImage shot = grab().toImage();
     QPainter p(&shot);
     p.drawImage(QRect(view_->mapTo(this, QPoint(0, 0)), view_->size()), view_->grabFramebuffer());
+    for (QWidget* c : view_->findChildren<QWidget*>(QString(), Qt::FindDirectChildrenOnly)) // the play banner, ▶ ⏸ ■
+        if (c->isVisible()) c->render(&p, c->mapTo(this, QPoint(0, 0)), QRegion(), QWidget::DrawChildren); // rounded: no square backdrop
     return shot;
 }
 
 void MainWindow::runAutomation(int preset, int frames, const QString& shot, const QString& csv) {
     preset = std::clamp(preset, -1, int(samples().size()) - 1);
-    if (preset < 0) startBuilder();
-    else {
+    if (preset < 0) {
+        startBuilder();
+        if (auto_.throughCamera) builder_->lookThroughActiveCamera();
+    } else {
         builder_->showSample();
         ctrl_->post([preset](Simulation& s) { loadSample(s, preset); });
     }

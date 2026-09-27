@@ -60,7 +60,8 @@ private:
 //   left button - on a gizmo handle: drag it; a click on an object selects it (again on the same
 //     spot: the one behind it; Shift or Ctrl + click adds or takes it away); a click on empty space
 //     selects nothing; a drag from empty space draws a selection box (Shift adds, Ctrl takes away);
-//     Shift + drag of an object slides it across the floor;
+//     Shift + drag of an object slides it across the floor; Shift held when a handle drag starts
+//     clones the selection (the popover asks how many); Shift pressed during a drag is "finer";
 //   right button - a click opens the menu, a drag moves the camera (the scheme says how);
 //   middle button, Alt + any button - the camera.
 // With no button pressed the handle or object under the mouse is highlighted. During a keyboard
@@ -71,6 +72,7 @@ public:
     void move(Viewport& v, QMouseEvent* e) override;
     void release(Viewport& v, QMouseEvent* e) override;
     bool boxSelecting() const { return box_; }
+    bool cloning() const { return cloning_; } // this handle drag began with Shift: it clones
     QRectF boxRect() const { return QRectF(pressPos_, boxEnd_).normalized(); }
 
 private:
@@ -83,6 +85,9 @@ private:
 
     GizmoHandle pending_ = GizmoHandle::None; // a handle pressed; the drag starts after 3 px
     bool floorDrag_ = false;                  // Shift+drag of an object (Shift is not "fine" then)
+    bool pressShift_ = false;                 // Shift was down at the left press
+    bool cloning_ = false;                    // the handle drag clones (Shift at its start)
+    bool cloneShiftHeld_ = false;             // ... and that Shift is still down: not "finer" yet
     bool clickPending_ = false, rightClickPending_ = false, box_ = false;
     uint32_t pressedEntity_ = 0;              // the object under the left press (0: empty space)
     QPointF pressPos_, rightPressPos_, boxEnd_;

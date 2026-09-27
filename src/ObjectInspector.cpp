@@ -73,6 +73,7 @@ ObjectInspector::ObjectInspector(QWidget* parent) : QWidget(parent) {
 void ObjectInspector::setObject(const rf::SceneObject& o) {
     const QSignalBlocker a(visible_), b(locked_);
     name_->setText(QString::fromStdString(o.name));
+    name_->setPlaceholderText("имя");
     visible_->setChecked(o.visible);
     locked_->setChecked(o.locked);
     colourValue_ = QColor::fromRgbF(o.color.x, o.color.y, o.color.z);
@@ -92,6 +93,17 @@ void ObjectInspector::writeTo(rf::SceneObject& o) const {
 }
 
 void ObjectInspector::setPosition(const rf::Vector3& p) { position_->setValue(p); }
+
+void ObjectInspector::showMixed(bool name, int positionMask, int rotationMask) {
+    if (name) {
+        name_->clear();
+        name_->setPlaceholderText("— разные имена —");
+    }
+    for (int k = 0; k < 3; ++k) {
+        if (positionMask & (1 << k)) ::showMixed(position_->spin(k));
+        if (rotationMask & (1 << k)) ::showMixed(rotation_->spin(k));
+    }
+}
 
 void ObjectInspector::pickColour() {
     const QColor c = QColorDialog::getColor(colourValue_, this, "Цвет");

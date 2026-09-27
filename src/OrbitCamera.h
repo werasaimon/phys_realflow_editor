@@ -44,6 +44,13 @@ public:
     // Looks along a direction (the view's forward), keeping the target: the axis views.
     void lookAlong(const QVector3D& forward);
     QVector3D right() const; // the screen's right in the world
+    QVector3D up() const;    // the screen's up in the world
+    // Looking through a scene camera: the eye there, looking along `forward` with `up` as the screen's
+    // up (the roll about the view axis kept), and that camera's lens. The orbit's target is put
+    // `distance()` ahead, so orbiting, panning and flying go on from there.
+    void setEyeFrame(const QVector3D& eye, const QVector3D& forward, const QVector3D& up);
+    void setLens(float fovDeg, float nearClip, float farClip);
+    float roll() const { return roll_; }
     // Fit the whole box in view; yaw/pitch in degrees.
     void frame(const rf::AABB& box, float yawDeg, float pitchDeg);
 
@@ -54,6 +61,8 @@ public:
 private:
     QVector3D target_{0, 0.5f, 0};
     float distance_ = 3.5f, yaw_ = 55.0f, pitch_ = 22.0f, fov_ = 40.0f;
+    float roll_ = 0.0f;                 // degrees about the view axis (a scene camera's)
+    float near_ = 0.0f, far_ = 0.0f;   // a scene camera's clip planes; 0: from the distance
 };
 
 // Ray / axis-aligned plane intersection: plane {p : p[axis] == coord}. Returns t or -1.

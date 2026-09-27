@@ -1,3 +1,6 @@
+// The editor's entry point: the dark palette and the style sheet of the whole window, the software
+// OpenGL switch (it has to be chosen before the application exists), the command line (automation,
+// tests, pictures), and the counting operator new behind the probe's "allocations per frame".
 #include "Icons.h"
 #include "MainWindow.h"
 #include "SelfTest.h"
@@ -8,6 +11,7 @@
 #include <QCommandLineParser>
 #include <QPalette>
 #include <QStyleFactory>
+#include <QSettings>
 #include <QSurfaceFormat>
 
 #include <cstdlib>
@@ -73,6 +77,7 @@ static QString windowStyle() {
            "QToolBar#createBar QToolButton { padding: 4px 10px; border-radius: 8px; min-width: 64px; }"
            "QToolBar#createBar QToolButton:hover { background: #394150; }"
            "QToolBar#createBar QToolButton:pressed { background: #2d5c99; }"
+           "QToolBar#createBar QToolButton#lightsButton::menu-indicator { image: none; width: 0; }"
            "QToolBar#createBar QToolButton#compactButton { min-width: 0; padding: 6px 12px; margin-left: 4px; border: 1px solid #3a3f48; }"
            "QToolBar#createBar QToolButton#compactButton:checked { background: #24466f; border: 1px solid #4096ff; }"
            "QToolBar#createBar QToolButton#compactButton::menu-indicator { image: none; }"
@@ -108,6 +113,20 @@ static QString builderStyle() {
            "QWidget#builderPanel QToolButton#colliderButton { padding: 3px; border: 1px solid #3a3f48; border-radius: 6px; background: #22262c; }"
            "QWidget#builderPanel QToolButton#colliderButton:checked { background: #1f4a33; border: 1px solid #7cff9a; }"
            "QWidget#builderPanel QLabel#colliderKindName { color: #7cff9a; }"
+           "QFrame#playBanner { background: rgba(58, 40, 12, 225); border: 1px solid #f0a020; border-radius: 8px; }"
+           "QFrame#playBanner QLabel { color: #ffd58a; font-weight: 600; }"
+           "QFrame#playBanner QPushButton#keepButton { background: #f0a020; color: #1c1810; border: none; border-radius: 6px;"
+           " padding: 5px 10px; font-weight: 600; }"
+           "QFrame#playBanner QPushButton#keepButton:hover { background: #ffbe4a; }"
+           "QFrame#bigControls { background: rgba(18, 20, 24, 170); border: 1px solid rgba(255, 255, 255, 40); border-radius: 24px; }"
+           "QFrame#bigControls QToolButton#bigControl { background: transparent; border: none; border-radius: 20px; padding: 4px; }"
+           "QFrame#bigControls QToolButton#bigControl:hover { background: rgba(255, 255, 255, 45); }"
+           "QFrame#commandSearch { background: #22262c; border: 1px solid #4096ff; border-radius: 10px; }"
+           "QFrame#commandSearch QLineEdit { padding: 8px; font-size: 11pt; border-radius: 6px; }"
+           "QFrame#commandSearch QListWidget#commandList { border: none; background: #1d2025; }"
+           "QFrame#commandSearch QListWidget#commandList::item { padding: 5px 6px; }"
+           "QFrame#commandSearch QListWidget#commandList::item:selected { background: #24466f; }"
+           "QFrame#commandSearch QLabel#commandTip { color: #8a93a3; }"
            "QFrame#inlineBanner { background: #4a3b16; border: 1px solid #c99a2e; border-radius: 8px; }"
            "QFrame#inlineBanner QLabel { color: #ffe3a3; }"
            "QFrame#inlineBanner QPushButton#bannerButton { background: #c99a2e; color: #1c1810; border: none; border-radius: 6px;"
@@ -121,7 +140,9 @@ static QString builderStyle() {
 static bool wantsSoftwareGL(int argc, char** argv) {
     for (int i = 1; i < argc; ++i)
         if (QString::fromLocal8Bit(argv[i]) == "--software-gl") return true;
-    return qEnvironmentVariableIntValue("RF_SOFTWARE_GL") != 0;
+    if (qEnvironmentVariableIntValue("RF_SOFTWARE_GL") != 0) return true;
+    // Chosen once after a white window (MainWindow::checkBlankView) or in Вид → Рендер на процессоре.
+    return QSettings("PhysRealFlow", "PhysRealFlow").value("render/softwareGL", false).toBool();
 }
 
 static void setSurfaceFormat(bool software) {
@@ -149,12 +170,13 @@ struct Options {
     QCommandLineOption shots{"shots", "With --self-test: also save screenshots (gizmo, edit and play) into the directory.", "dir"};
     QCommandLineOption gizmoShots{"gizmo-shots", "Save screenshots of the gizmo (move, rotate, scale) into the directory and quit.", "dir"};
     QCommandLineOption edit{"edit", "The builder's screenshot in edit mode: the scene as authored, nothing simulated."};
+    QCommandLineOption camera{"camera", "The builder's screenshot looks through the scene's active camera (else its first)."};
     QCommandLineOption firstStart{"first-start", "Start as on the very first run: the welcome scene and the first-minute hint."};
     QCommandLineOption thumbnail{"thumbnail", "Only the 3D view, no window on the screen (the gallery's pictures)."};
     QCommandLineOption galleryShot{"gallery-shot", "Make every picture of the examples gallery, save the gallery as a PNG, quit.", "file"};
 
     void addTo(QCommandLineParser& cli) const {
-        cli.addOptions({preset, frames, shot, csv, size, software, icons, window, scene, selfTest, shots, gizmoShots, edit,
+        cli.addOptions({preset, frames, shot, csv, size, software, icons, window, scene, selfTest, shots, gizmoShots, edit, camera,
                         firstStart, thumbnail, galleryShot});
     }
 };
@@ -166,6 +188,7 @@ static int run(QApplication& app, MainWindow& w, const QCommandLineParser& cli, 
     const int preset = cli.isSet(o.preset) ? cli.value(o.preset).toInt() : -1;
     w.setScreenshotWholeWindow(cli.isSet(o.window));
     w.setEditScreenshot(cli.isSet(o.edit));
+    w.setScreenshotThroughCamera(cli.isSet(o.camera));
     w.setForceFirstStart(cli.isSet(o.firstStart));
     if (cli.isSet(o.scene)) w.setStartScene(cli.value(o.scene));
     if (cli.isSet(o.galleryShot)) {

@@ -18,6 +18,12 @@ class QVBoxLayout;
 // A number field for the inspector: fixed range, step and decimals; typing counts only on Enter.
 QDoubleSpinBox* makeSpin(double min, double max, double step, int decimals, const QString& suffix = {});
 
+// Several objects selected and this number differs between them: the field shows "—" until it is
+// given a value (then that value goes to all of them). clearMixed() on a panel gives every field of
+// it its own range back (and a checkbox marked mixed its own text) before the panel is filled again.
+void showMixed(QDoubleSpinBox* s);
+void clearMixed(QWidget* panel);
+
 // A small-caps title that starts a group of fields ("ОБЪЕКТ", "ФОРМА").
 QLabel* sectionTitle(const QString& text);
 
@@ -28,6 +34,7 @@ public:
     Vec3Row(double min, double max, double step, int decimals, QWidget* parent = nullptr);
     void setValue(const rf::Vector3& v); // does not report a change
     rf::Vector3 value() const;
+    QDoubleSpinBox* spin(int axis) const { return spins_[axis]; } // to show one of them as mixed
 
 signals:
     void edited(); // the user changed one of the three numbers

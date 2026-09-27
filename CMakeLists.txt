@@ -26,10 +26,11 @@ qt_standard_project_setup()
 
 qt_add_executable(realflow WIN32
   src/main.cpp
-  src/MainWindow.h      src/MainWindow.cpp src/MainWindowStart.cpp src/MainWindowControls.cpp
+  src/MainWindow.h      src/MainWindow.cpp src/MainWindowStart.cpp src/MainWindowControls.cpp src/MainWindowToolbar.cpp src/MainWindowPlay.cpp
   src/FirstStartHint.h  src/FirstStartHint.cpp
   src/ExamplesGallery.h src/ExamplesGallery.cpp
-  src/Viewport.h        src/Viewport.cpp src/ViewportInput.cpp
+  src/Viewport.h        src/Viewport.cpp src/ViewportInput.cpp src/ViewportLights.cpp src/ViewportPlay.cpp
+  src/SceneMarkers.h    src/SceneMarkers.cpp
   src/NavCube.h         src/NavCube.cpp
   src/Shaders.h
   src/VolumeRenderer.cpp
@@ -42,14 +43,20 @@ qt_add_executable(realflow WIN32
   src/Gizmo.h           src/Gizmo.cpp
   src/ControlScheme.h   src/ControlScheme.cpp
   src/EditView.h        src/EditView.cpp
+  src/MeshNormals.h     src/MeshNormals.cpp
+  src/PlayOverlay.h     src/PlayOverlay.cpp
+  src/CommandSearch.h   src/CommandSearch.cpp
   src/SceneBuilder.h    src/SceneBuilder.cpp  src/SceneBuilderPanels.cpp src/SceneBuilderColliders.cpp src/SceneBuilderSelection.cpp
+  src/SceneBuilderObjects.cpp src/SceneBuilderClone.cpp src/SceneBuilderMulti.cpp src/SceneBuilderLights.cpp src/SceneBuilderKeep.cpp
+  src/ManyPanels.h      src/ManyPanels.cpp
+  src/ClonePopover.h    src/ClonePopover.cpp src/RuPlural.h
   src/ColliderGuides.h  src/ColliderGuides.cpp
   src/ColliderPanel.h   src/ColliderPanel.cpp
   src/ObjectInspector.h src/ObjectInspector.cpp
   src/InspectorWidgets.h src/InspectorWidgets.cpp
   src/RoleBar.h         src/RoleBar.cpp
   src/Icons.h           src/Icons.cpp
-  src/SelfTest.h        src/SelfTest.cpp  src/SelfTestSupport.h src/SelfTestComponents.cpp src/SelfTestControls.cpp
+  src/SelfTest.h        src/SelfTest.cpp  src/SelfTestSupport.h src/SelfTestComponents.cpp src/SelfTestControls.cpp src/SelfTestMany.cpp src/SelfTestLights.cpp src/SelfTestPlay.cpp
 )
 target_link_libraries(realflow PRIVATE rfcore rfsamples
   Qt6::Core Qt6::Gui Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets Qt6::Charts)

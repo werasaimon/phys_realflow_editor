@@ -384,11 +384,13 @@ QString Viewport::mouseHint() const {
     if (!editMode_)
         return "ЛКМ по телу: схватить и тащить · " + cameraHint(scheme_) + " · Пробел: пауза · Esc: стоп";
     if (gizmo_.modal()) return "X / Y / Z: ось (ещё раз — своя) · число: точно · Enter или ЛКМ: принять · Esc или ПКМ: отмена";
+    if (gizmo_.dragging() && editTool_.cloning())
+        return "Клонирование: отпустите — спросим, сколько копий · X / Y / Z: ось · Ctrl: шаг · Esc или ПКМ: отмена";
     if (gizmo_.dragging()) return "X / Y / Z: только по оси · Shift+X / Y / Z: в плоскости · Ctrl: шаг · Shift: точнее · Esc или ПКМ: отмена";
     if (editTool_.boxSelecting()) return "Отпустите — выбрать всё в рамке · Shift: добавить · Ctrl: убрать";
     if (gizmoShown() && gizmo_.hover() != GizmoHandle::None) {
         const char* verb = gizmo_.mode() == GizmoMode::Rotate ? "вращать" : gizmo_.mode() == GizmoMode::Scale ? "масштабировать" : "двигать";
-        return QString("Тяните: %1 · Ctrl: шаг · Shift: точнее · X / Y / Z во время драга: ось").arg(verb);
+        return QString("Тяните: %1 · Shift+тяните: клонировать · Ctrl: шаг · Shift во время драга: точнее · X / Y / Z: ось").arg(verb);
     }
     if (hoveredEntity_) return "ЛКМ: выбрать · Shift или Ctrl+ЛКМ: добавить / убрать · двойной клик: показать · " + cameraHint(scheme_);
     return "ЛКМ: выбрать · тяните с пустого места: рамка · " + cameraHint(scheme_) + " · F: показать";

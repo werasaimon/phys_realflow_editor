@@ -66,6 +66,8 @@ inline QImage windowShot(QMainWindow& w) {
     if (auto* v = w.findChild<Viewport*>()) {
         QPainter p(&shot);
         p.drawImage(QRect(v->mapTo(&w, QPoint(0, 0)), v->size()), v->grabFramebuffer());
+        for (QWidget* c : v->findChildren<QWidget*>(QString(), Qt::FindDirectChildrenOnly)) // the play banner, ▶ ⏸ ■
+            if (c->isVisible()) c->render(&p, c->mapTo(&w, QPoint(0, 0)), QRegion(), QWidget::DrawChildren); // rounded: no square backdrop
     }
     return shot;
 }
@@ -88,3 +90,10 @@ inline bool waitFrames(Viewport* v, uint64_t frames, int timeoutMs) {
 int runComponentTests(QMainWindow& w, SceneBuilder& b, Viewport* v, const QString& shotsDir);
 // The keys and the mouse of docs/controls.md (SelfTestControls.cpp).
 int runControlTests(QMainWindow& w, SceneBuilder& b, Viewport* v, const QString& shotsDir);
+// Many objects at once: Shift-clone, instances, arrays, groups, multi-edit (SelfTestMany.cpp).
+int runManyTests(QMainWindow& w, SceneBuilder& b, Viewport* v, const QString& shotsDir);
+// Lights and cameras: made, picked, moved, lighting a cube, looked through (SelfTestLights.cpp).
+int runLightTests(QMainWindow& w, SceneBuilder& b, Viewport* v, const QString& shotsDir);
+// The play-mode pass: the top bar's widths, the same look in play, the banner, K, Ctrl+K, the
+// orbit pivot, the blank-window check (SelfTestPlay.cpp).
+int runPlayTests(QMainWindow& w, SceneBuilder& b, Viewport* v, const QString& shotsDir);

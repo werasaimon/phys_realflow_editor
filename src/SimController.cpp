@@ -1,3 +1,6 @@
+// The simulation thread (see SimController.h): a loop that runs the posted commands, steps a frame
+// when running (or when one step is asked for), publishes a fresh snapshot, and waits so that a
+// scene does not run faster than the wall clock (the wind tunnel is not held back).
 #include "SimController.h"
 
 #include <chrono>

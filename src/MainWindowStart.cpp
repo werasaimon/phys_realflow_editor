@@ -52,6 +52,7 @@ void MainWindow::startBuilder(bool interactive) {
     if (!scene.isEmpty() && !builder_->openFile(scene, error)) QMessageBox::warning(this, "Открыть сцену", error);
     if (scene.isEmpty() || !error.isEmpty()) builder_->newScene();
     if (firstMinute) QTimer::singleShot(0, this, &MainWindow::startFirstMinute); // after the first layout
+    if (interactive) QTimer::singleShot(2500, this, [this] { checkBlankView(); }); // a white window: offer the CPU
     // No question before the first frame: the simple mouse scheme is the default, and the choice
     // (Blender, Maya/Unity) is one line in the last hint and in Вид → Управление.
 }

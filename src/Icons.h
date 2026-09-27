@@ -27,6 +27,13 @@ QIcon controlIcon(ControlIcon control, int size = 32);
 QPixmap rolePixmap(RoleIcon role, int size); // for small chips next to a name
 // The kinds of collider as small wireframe glyphs: Авто, Коробка, Сфера, Капсула, Оболочка, Точно.
 QIcon colliderIcon(rf::ColliderKind kind, int size = 28);
+// Many objects at once: a group (three cubes held together) and the patterns of an array - a row, a
+// grid, a circle of small cubes.
+enum class ObjectIcon { Group, ArrayLine, ArrayGrid, ArrayCircle, Count };
+QIcon objectIcon(ObjectIcon kind, int size = 28);
+// Lights and cameras of a scene: a sun, a light bulb (a lamp), a spotlight's cone, a camera.
+enum class SceneIcon { Sun, Bulb, Spot, Camera, Count };
+QIcon sceneIcon(SceneIcon kind, int size = 28);
 
 // Writes every icon as a PNG into `dir` (for the README and a quick look); returns the file count.
 int dumpIcons(const QString& dir, int size = 96);

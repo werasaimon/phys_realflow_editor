@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="470" viewBox="0 0 960 470" role="img" aria-label="Геометрия и коллайдер">
+  <title>Геометрия — как выглядит, коллайдер — чем сталкивается</title>
+  <defs>
+    <radialGradient id="ball" cx="0.38" cy="0.35" r="0.7">
+      <stop offset="0" stop-color="#9cc4ff"/>
+      <stop offset="0.45" stop-color="#3e7bfa"/>
+      <stop offset="1" stop-color="#15306b"/>
+    </radialGradient>
+  </defs>
+  <style>
+    .bg { fill: #16181f; }
+    .card { fill: #1f222b; stroke: #333846; stroke-width: 1.5; }
+    .h1 { font: 700 26px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #eef0f5; }
+    .sub { font: 400 15px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #9aa0b0; }
+    .h2 { font: 700 20px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #eef0f5; text-anchor: middle; }
+    .q { font: 600 16px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; text-anchor: middle; }
+    .t { font: 400 15px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #c9cdd8; }
+    .wire { fill: none; stroke: #4fd08a; stroke-width: 2; }
+    .floor { stroke: #454b5c; stroke-width: 2; }
+  </style>
+  <rect class="bg" width="960" height="470" rx="16"/>
+  <text class="h1" x="36" y="50">Геометрия и коллайдер — две разные вещи</text>
+  <text class="sub" x="36" y="76">физика двигает и поворачивает геометрию, но никогда её не меняет</text>
+
+  <!-- Геометрия -->
+  <rect class="card" x="36" y="100" width="280" height="300" rx="14"/>
+  <text class="h2" x="176" y="134">Геометрия</text>
+  <text class="q" x="176" y="158" fill="#6fa2ff">как выглядит</text>
+  <circle cx="176" cy="262" r="62" fill="url(#ball)"/>
+  <line class="floor" x1="70" y1="346" x2="282" y2="346"/>
+  <text class="t" x="176" y="380" text-anchor="middle">Форма: Сфера</text>
+
+  <!-- plus -->
+  <text x="340" y="268" font-family="Segoe UI, sans-serif" font-size="40" font-weight="700" fill="#f5c542" text-anchor="middle">+</text>
+
+  <!-- Коллайдер -->
+  <rect class="card" x="364" y="100" width="280" height="300" rx="14"/>
+  <text class="h2" x="504" y="134">Коллайдер</text>
+  <text class="q" x="504" y="158" fill="#5fd394">чем сталкивается</text>
+  <circle cx="504" cy="262" r="62" fill="url(#ball)" opacity="0.28"/>
+  <rect class="wire" x="462" y="178" width="84" height="168" rx="42"/>
+  <ellipse class="wire" cx="504" cy="220" rx="42" ry="10"/>
+  <ellipse class="wire" cx="504" cy="304" rx="42" ry="10"/>
+  <ellipse class="wire" cx="504" cy="262" rx="14" ry="84"/>
+  <line class="floor" x1="398" y1="346" x2="610" y2="346"/>
+  <text class="t" x="504" y="380" text-anchor="middle">Коллайдер: Капсула</text>
+
+  <!-- = -->
+  <text x="668" y="268" font-family="Segoe UI, sans-serif" font-size="40" font-weight="700" fill="#f5c542" text-anchor="middle">=</text>
+
+  <!-- Result -->
+  <rect class="card" x="692" y="100" width="232" height="300" rx="14"/>
+  <text class="h2" x="808" y="134">В игре</text>
+  <text class="q" x="808" y="158" fill="#f5c542">выглядит сферой,</text>
+  <text class="q" x="808" y="178" fill="#f5c542">ударяется как капсула</text>
+  <circle cx="808" cy="262" r="50" fill="url(#ball)"/>
+  <rect class="wire" x="774" y="194" width="68" height="152" rx="34" opacity="0.8"/>
+  <line class="floor" x1="716" y1="346" x2="900" y2="346"/>
+  <text class="t" x="808" y="380" text-anchor="middle">форма не меняется</text>
+
+  <!-- legend -->
+  <g transform="translate(36,420)">
+    <line x1="0" y1="14" x2="28" y2="14" stroke="#4fd08a" stroke-width="3"/>
+    <text class="t" x="36" y="19">тело движется</text>
+    <line x1="170" y1="14" x2="198" y2="14" stroke="#9aa0b0" stroke-width="3"/>
+    <text class="t" x="206" y="19">неподвижное препятствие</text>
+    <line x1="420" y1="14" x2="448" y2="14" stroke="#2f6b4c" stroke-width="3"/>
+    <text class="t" x="456" y="19">тело уснуло (тускло)</text>
+    <text class="t" x="640" y="19" fill="#9aa0b0">каркас виден у выделенного объекта</text>
+  </g>
+</svg>

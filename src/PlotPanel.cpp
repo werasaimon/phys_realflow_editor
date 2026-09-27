@@ -1,3 +1,7 @@
+// The plots at the bottom of the window (see PlotPanel.h): one small chart per quantity, filled
+// from the Probe's channels and the scene's own plots every frame; the "Каналы" menu picks which are
+// drawn, the history of every channel is kept so that a chart switched on later is full at once,
+// and writeCsv() saves all of them.
 #include "PlotPanel.h"
 
 #include <QAction>

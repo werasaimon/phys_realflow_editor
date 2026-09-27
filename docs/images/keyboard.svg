@@ -1,0 +1,128 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="640" viewBox="0 0 960 640" role="img" aria-label="Горячие клавиши">
+  <title>Горячие клавиши</title>
+  <style>
+    .bg { fill: #16181f; }
+    .card { fill: #1f222b; stroke: #333846; stroke-width: 1.5; }
+    .h1 { font: 700 26px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #eef0f5; }
+    .sub { font: 400 15px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #9aa0b0; }
+    .h2 { font: 700 18px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
+    .k { fill: #2e3240; stroke: #5d6377; stroke-width: 1.5; }
+    .ks { fill: #0e1015; }
+    .kt { font: 700 15px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #f0f2f7; text-anchor: middle; }
+    .kbig { font: 700 22px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #f0f2f7; text-anchor: middle; }
+    .plus { font: 400 15px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #8a90a2; text-anchor: middle; }
+    .t { font: 400 16px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #e3e6ee; }
+    .tc { font: 400 16px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #e3e6ee; text-anchor: middle; }
+    .dim { font: 400 14px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #9aa0b0; }
+    .blue { fill: #6fa2ff; } .green { fill: #5fd394; } .yellow { fill: #f5c542; } .pink { fill: #ff7a93; } .violet { fill: #c9a8ff; }
+  </style>
+  <rect class="bg" width="960" height="640" rx="16"/>
+  <text class="h1" x="32" y="48">Горячие клавиши</text>
+  <text class="sub" x="32" y="74">строка состояния внизу окна всегда подсказывает, что клавиши делают сейчас</text>
+
+  <!-- Инструменты -->
+  <rect class="card" x="32" y="96" width="440" height="160" rx="12"/>
+  <text class="h2 blue" x="52" y="126">Инструменты</text>
+  <g>
+    <rect class="ks" x="62" y="144" width="52" height="52" rx="8"/><rect class="k" x="62" y="140" width="52" height="52" rx="8"/><text class="kbig" x="88" y="174">Q</text>
+    <rect class="ks" x="166" y="144" width="52" height="52" rx="8"/><rect class="k" x="166" y="140" width="52" height="52" rx="8"/><text class="kbig" x="192" y="174">W</text>
+    <rect class="ks" x="270" y="144" width="52" height="52" rx="8"/><rect class="k" x="270" y="140" width="52" height="52" rx="8"/><text class="kbig" x="296" y="174">E</text>
+    <rect class="ks" x="374" y="144" width="52" height="52" rx="8"/><rect class="k" x="374" y="140" width="52" height="52" rx="8"/><text class="kbig" x="400" y="174">R</text>
+    <text class="tc" x="88" y="224">выбор</text>
+    <text class="tc" x="192" y="224">двигать</text>
+    <text class="tc" x="296" y="224">вращать</text>
+    <text class="tc" x="400" y="224">масштаб</text>
+  </g>
+
+  <!-- Симуляция -->
+  <rect class="card" x="488" y="96" width="440" height="160" rx="12"/>
+  <text class="h2 green" x="508" y="126">Симуляция</text>
+  <g>
+    <rect class="ks" x="510" y="144" width="150" height="52" rx="8"/><rect class="k" x="510" y="140" width="150" height="52" rx="8"/><text class="kt" x="585" y="171">Пробел</text>
+    <rect class="ks" x="700" y="144" width="64" height="52" rx="8"/><rect class="k" x="700" y="140" width="64" height="52" rx="8"/><text class="kt" x="732" y="171">Esc</text>
+    <rect class="ks" x="836" y="144" width="52" height="52" rx="8"/><rect class="k" x="836" y="140" width="52" height="52" rx="8"/><text class="kbig" x="862" y="172">.</text>
+    <text class="tc" x="585" y="224">пуск / пауза</text>
+    <text class="tc" x="732" y="224">стоп</text>
+    <text class="dim" x="732" y="244" text-anchor="middle">сцена как до пуска</text>
+    <text class="tc" x="862" y="224">шаг</text>
+  </g>
+
+  <!-- Правка -->
+  <rect class="card" x="32" y="272" width="440" height="222" rx="12"/>
+  <text class="h2 pink" x="52" y="302">Правка</text>
+  <g>
+    <rect class="k" x="52" y="318" width="50" height="32" rx="6"/><text class="kt" x="77" y="339">Del</text>
+    <text class="t" x="196" y="340">удалить</text>
+
+    <rect class="k" x="52" y="360" width="50" height="32" rx="6"/><text class="kt" x="77" y="381">Ctrl</text>
+    <text class="plus" x="114" y="381">+</text>
+    <rect class="k" x="126" y="360" width="34" height="32" rx="6"/><text class="kt" x="143" y="381">D</text>
+    <text class="t" x="196" y="382">дублировать на месте</text>
+
+    <rect class="k" x="52" y="402" width="50" height="32" rx="6"/><text class="kt" x="77" y="423">Ctrl</text>
+    <text class="plus" x="114" y="423">+</text>
+    <rect class="k" x="126" y="402" width="34" height="32" rx="6"/><text class="kt" x="143" y="423">G</text>
+    <text class="t" x="196" y="424">сгруппировать</text>
+    <text class="dim" x="316" y="424">(с Shift — обратно)</text>
+
+    <rect class="k" x="52" y="444" width="50" height="32" rx="6"/><text class="kt" x="77" y="465">Ctrl</text>
+    <text class="plus" x="114" y="465">+</text>
+    <rect class="k" x="126" y="444" width="34" height="32" rx="6"/><text class="kt" x="143" y="465">Z</text>
+    <text class="t" x="196" y="466">отменить,</text>
+    <rect class="k" x="276" y="444" width="50" height="32" rx="6"/><text class="kt" x="301" y="465">Ctrl</text>
+    <text class="plus" x="338" y="465">+</text>
+    <rect class="k" x="350" y="444" width="34" height="32" rx="6"/><text class="kt" x="367" y="465">Y</text>
+    <text class="t" x="394" y="466">повтор</text>
+  </g>
+
+  <!-- Вид -->
+  <rect class="card" x="488" y="272" width="440" height="222" rx="12"/>
+  <text class="h2 yellow" x="508" y="302">Вид</text>
+  <g>
+    <rect class="k" x="508" y="318" width="34" height="32" rx="6"/><text class="kt" x="525" y="339">F</text>
+    <text class="t" x="640" y="340">показать выбранное</text>
+    <text class="dim" x="640" y="358">без выбора — всю сцену</text>
+
+    <rect class="k" x="508" y="366" width="52" height="32" rx="6"/><text class="kt" x="534" y="387">Num</text>
+    <rect class="k" x="566" y="366" width="20" height="32" rx="5"/><text class="kt" x="576" y="387">7</text>
+    <rect class="k" x="590" y="366" width="20" height="32" rx="5"/><text class="kt" x="600" y="387">1</text>
+    <rect class="k" x="614" y="366" width="20" height="32" rx="5"/><text class="kt" x="624" y="387">3</text>
+    <text class="t" x="640" y="388">сверху / спереди / справа</text>
+    <text class="dim" x="640" y="406">с Ctrl — с обратной стороны</text>
+
+    <rect class="k" x="508" y="414" width="34" height="32" rx="6"/><text class="kt" x="525" y="435">H</text>
+    <rect class="k" x="548" y="414" width="40" height="32" rx="6"/><text class="kt" x="568" y="435">Alt</text>
+    <text class="plus" x="596" y="435">+</text>
+    <rect class="k" x="604" y="414" width="30" height="32" rx="6"/><text class="kt" x="619" y="435">H</text>
+    <text class="t" x="640" y="436">скрыть · показать всё</text>
+
+    <rect class="k" x="508" y="454" width="34" height="32" rx="6"/><text class="kt" x="525" y="475">L</text>
+    <text class="t" x="552" y="476">оси мира / свои</text>
+    <rect class="k" x="708" y="454" width="30" height="32" rx="6"/><text class="kt" x="723" y="475">+</text>
+    <rect class="k" x="742" y="454" width="30" height="32" rx="6"/><text class="kt" x="757" y="475">−</text>
+    <text class="t" x="782" y="476">размер гизмо</text>
+  </g>
+
+  <!-- Пока тянете гизмо -->
+  <rect class="card" x="32" y="510" width="896" height="106" rx="12"/>
+  <text class="h2 violet" x="52" y="540">Пока тянете гизмо</text>
+  <g>
+    <rect class="k" x="52" y="558" width="28" height="32" rx="6"/><text class="kt" x="66" y="579">X</text>
+    <rect class="k" x="84" y="558" width="28" height="32" rx="6"/><text class="kt" x="98" y="579">Y</text>
+    <rect class="k" x="116" y="558" width="28" height="32" rx="6"/><text class="kt" x="130" y="579">Z</text>
+    <text class="t" x="152" y="580">ось</text>
+    <text class="dim" x="152" y="602">с Shift — плоскость</text>
+
+    <rect class="k" x="310" y="558" width="50" height="32" rx="6"/><text class="kt" x="335" y="579">Ctrl</text>
+    <text class="t" x="370" y="580">шаг</text>
+    <text class="dim" x="370" y="602">0,1 м · 15° · 10 %</text>
+
+    <rect class="k" x="530" y="558" width="56" height="32" rx="6"/><text class="kt" x="558" y="579">Shift</text>
+    <text class="t" x="596" y="580">точнее</text>
+    <text class="dim" x="596" y="602">мышь в 10 раз медленнее</text>
+
+    <rect class="k" x="790" y="558" width="44" height="32" rx="6"/><text class="kt" x="812" y="579">Esc</text>
+    <text class="t" x="842" y="580">отмена</text>
+    <text class="dim" x="842" y="602">или ПКМ</text>
+  </g>
+</svg>

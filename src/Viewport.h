@@ -1,6 +1,8 @@
 #pragma once
 // OpenGL viewport: orbit camera, particles as ray-traced sphere impostors, meshes, field slice,
-// streamlines, ray-marched smoke volume and a colour legend overlay.
+// streamlines, ray-marched smoke volume and a colour legend overlay. The scene's lights shade the
+// meshes (the first sun with shadows casts them from a shadow map), lights and cameras are drawn as
+// wireframes, and the view can look through a camera of the scene (ViewportLights.cpp).
 // Needs only OpenGL 3.0 (GLSL 1.30): runs on any GPU of the last ~15 years and on the CPU through
 // Mesa llvmpipe (--software-gl). A 3.3 core context is used when the driver offers one.
 
@@ -10,6 +12,7 @@
 #include "Gizmo.h"
 #include "NavCube.h"
 #include "OrbitCamera.h"
+#include "SceneMarkers.h"
 #include "ViewportTools.h"
 #include "scene/Simulation.h"
 
@@ -108,6 +111,16 @@ public:
     void setEditMode(bool on);
     bool editMode() const { return editMode_; }
     void setEditCaption(const QString& text) { editCaption_ = text; update(); } // the line under the title
+    // While the scene plays: a coloured frame round the view (ViewportPlay.cpp; PlayOverlay.h says why).
+    void setPlayFrame(bool on);
+    bool playFrame() const { return playFrame_; }
+    // Drawn on the CPU (Mesa llvmpipe / softpipe), not on a GPU.
+    bool softwareRenderer() const {
+        return renderer_.contains("llvmpipe", Qt::CaseInsensitive) || renderer_.contains("softpipe", Qt::CaseInsensitive);
+    }
+    // While the camera orbits: a small mark on the point it turns around (on = false: none).
+    void setOrbitPivot(const QVector3D& pivot, bool on);
+    bool orbitPivotShown() const { return orbiting_; }
     void setEditPicker(std::function<std::vector<PickHit>(const Ray&)> picker) { picker_ = std::move(picker); }
     std::vector<PickHit> pickAll(const Ray& ray) const { return picker_ ? picker_(ray) : std::vector<PickHit>(); }
     uint32_t pickEntity(const Ray& ray, rf::Vector3* hit = nullptr) const;
@@ -127,6 +140,17 @@ public:
     void cancelGizmoDrag(); // Esc or the right button during a handle drag: the object goes back
     void setBrushRadius(float r) { brushRadius_ = r; }
 
+    // Lights and cameras drawn as wireframes (SceneMarkers.h), from the scene builder.
+    void setSceneMarkers(std::vector<SceneMarker> markers) { markers_ = std::move(markers); update(); }
+    const std::vector<SceneMarker>& sceneMarkers() const { return markers_; }
+    // Looking through a camera of the scene: the view is that camera - its eye, its turn (roll too)
+    // and its lens. Moving the view then moves the camera (lookThroughMoved), as Blender's "lock
+    // camera to view". Off: the editor's own view comes back as it was.
+    void setLookThrough(bool on, const rf::Vector3& eye, const rf::Vector3& forward, const rf::Vector3& up, float fovDeg,
+                        float nearClip, float farClip);
+    bool lookingThrough() const { return lookThrough_; }
+    bool sunShadowDrawn() const { return shadowOn_; } // the last frame had the sun's shadow map
+
 signals:
     // World-space point and velocity of a mouse stroke (velocity is zero on the first click).
     void disturbanceRequested(rf::Vector3 position, rf::Vector3 velocity);
@@ -141,16 +165,23 @@ signals:
     void gizmoMoved(const GizmoPose& pose);           // where it has taken the object so far
     void gizmoFinished();                             // confirmed: one step of the undo history
     void gizmoCancelled();                            // Esc / right button: put the object back
+    void cloneDragStarted();                          // Shift was held when the handle drag began
+    void cloneDragFinished(QPointF pos);              // ... and it ended here: ask how many copies
     void editContextMenu(QPointF pos);                // edit mode: a right click without a drag
     void entityToggled(uint32_t id);                  // edit mode: Shift / Ctrl + click on an object
     void boxSelected(QRectF rect, Qt::KeyboardModifiers modifiers); // edit mode: the selection box, released
     void frameSelectedRequested();                    // edit mode: a double click (F)
     void hintChanged(QString hint);                   // what the buttons and keys do now changed
+    // Looking through a camera, the view was moved (orbit, pan, zoom, fly, an axis view): the camera goes there.
+    void lookThroughMoved(rf::Vector3 eye, rf::Vector3 forward, rf::Vector3 up);
     // The GPU / driver cannot do OpenGL 3.0: the window offers a restart in software mode.
     void openGLUnsupported(QString renderer);
 
 protected:
     void initializeGL() override;
+    void createUnitCubes();      // initializeGL, step by step
+    void createDynamicBuffers();
+    void createFieldTextures();
     void resizeGL(int w, int h) override;
     void paintGL() override;
     void mousePressEvent(QMouseEvent* e) override;
@@ -187,6 +218,7 @@ private:
     void drawBoxBodies(const QMatrix4x4& view, const QMatrix4x4& proj);
     void drawParticles(const QMatrix4x4& view, const QMatrix4x4& proj);
     void drawCloths(const QMatrix4x4& view, const QMatrix4x4& proj); // cloth sheets + soft body surfaces
+    void ensureClothMesh();
     void drawSlice(const QMatrix4x4& vp);
     void drawStreamlines(const QMatrix4x4& vp);
     void drawFieldLines(const QMatrix4x4& vp); // magnetic field lines
@@ -202,6 +234,13 @@ private:
     void buildMaskTriangles();
     void appendBodyTriangles(const rf::RenderSnapshot::Body& b, std::vector<float>& out) const;
     void drawGizmo(const QMatrix4x4& vp);
+    // ViewportLights.cpp: the wireframes of lights and cameras, the view through a camera, the lights.
+    void drawSceneMarkers(const QMatrix4x4& vp);
+    void syncLookThrough();                    // the view moved while looking through: say where to
+    void applySceneLights(const QMatrix4x4& view); // the mesh shader's lights for this frame
+    void renderSunShadow();                    // the shadow map of the first sun with shadows
+    bool ensureShadowTarget();
+    void drawShadowCasters();
     void drawEditLabel(class QPainter& p); // the live amount of a drag next to the cursor
     bool modalKey(QKeyEvent* e);
     void dragKey(QKeyEvent* e);        // X / Y / Z during a handle drag
@@ -217,6 +256,8 @@ private:
     void drawVolume(const QMatrix4x4& vp, const QVector3D& eye);
     void drawOverlay();
     void drawAxesAndHints(class QPainter& p);
+    void drawPlayFrame(class QPainter& p);  // ViewportPlay.cpp
+    void drawOrbitPivot(class QPainter& p);
     void drawLegend(class QPainter& p, const QRect& r, float lo, float hi, const QString& label, int map);
     QMatrix4x4 viewMatrix() const { return camera_.view(); }
     QMatrix4x4 projMatrix() const { return camera_.projection(float(width()) / std::max(1, height())); }
@@ -240,7 +281,7 @@ private:
     void pruneHullCache(); // needs the GL context current (paintGL)
     GpuMesh clothMesh_; // rebuilt every frame
     FluidSurfaceRenderer fluidSurface_; // liquid as a water surface (screen space)
-    GpuMesh& hullMesh(const std::shared_ptr<const rf::TriMesh>& m, bool smooth = false);
+    GpuMesh& hullMesh(const std::shared_ptr<const rf::TriMesh>& m); // auto-smooth normals
     uint64_t obstacleVersion_ = 0;
     GLuint sliceTex_ = 0, volumeTex_ = 0;
     // Copy of the scene's depth (after the opaque pass): the volume rays stop at solid surfaces.
@@ -252,9 +293,6 @@ private:
     uint64_t snapSerial_ = 0, particleSerial_ = ~0ull, sliceSerial_ = ~0ull, volumeSerial_ = ~0ull;
 
     QString renderer_;   // OpenGL renderer (GPU name, or llvmpipe on the CPU)
-    bool softwareRenderer() const {
-        return renderer_.contains("llvmpipe", Qt::CaseInsensitive) || renderer_.contains("softpipe", Qt::CaseInsensitive);
-    }
     bool glOk_ = true;   // OpenGL 3.0 or newer available
     QString glslHeader_; // "#version 330 core" on 3.3 core contexts, "#version 130" on 3.0
     OrbitCamera camera_;
@@ -295,7 +333,19 @@ private:
     uint32_t hoveredEntity_ = 0;
     QPointF lastMouse_;
     QString typed_; // the number typed during a keyboard transform
+    bool playFrame_ = false;   // the play mode's frame round the view
+    bool orbiting_ = false;    // the camera orbits: the pivot is marked
+    QVector3D orbitPivot_;
     QString editCaption_ = "Правка: физика стоит. Двигайте, вращайте, масштабируйте; ▶ Пуск оживит сцену.";
+    std::vector<SceneMarker> markers_;
+    std::vector<float> markerSolid_, markerFaint_; // reused every frame
+    bool lookThrough_ = false;
+    OrbitCamera editorCamera_;                 // the editor's own view while looking through a camera
+    QVector3D lookEye_, lookForward_, lookUp_; // the view as last set or reported (moves are the difference)
+    QOpenGLShaderProgram shadowProg_;
+    GLuint shadowFbo_ = 0, shadowTex_ = 0;
+    bool shadowOn_ = false;
+    QMatrix4x4 shadowVP_;                      // world -> the sun's clip space
     std::vector<GizmoPiece> gizmoPieces_; // reused every frame: drawing the gizmo allocates nothing
     // The outline mask: an offscreen target the outlined objects are drawn into, and their triangles
     // in world space (selected, hovered, without a role), rebuilt only when the scene or the lists change.

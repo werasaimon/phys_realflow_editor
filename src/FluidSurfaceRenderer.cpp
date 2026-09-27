@@ -1,3 +1,6 @@
+// The water surface of a particle liquid, drawn in screen space (see FluidSurfaceRenderer.h for the
+// method and its sources): the GLSL of the four passes (depth, thickness, narrow-range smoothing,
+// shading) and the framebuffers they draw into, made again when the view changes size.
 #include "FluidSurfaceRenderer.h"
 
 #include <QOpenGLContext>
@@ -20,7 +23,8 @@ void main() {
     vCenter = vp.xyz;
     gl_Position = uProj * vp;
     gl_PointSize = 2.0 * uRadius * uPointScale / max(-vp.z, 1e-3);
-})";
+}
+)";
 
 // 1. Nearest sphere surface: eye-space distance in the colour, true depth for the depth test.
 static const char* kDepthFS = R"(
@@ -37,7 +41,8 @@ void main() {
     vec4 clip = uProj * vec4(p, 1.0);
     gl_FragDepth = clip.z / clip.w * 0.5 + 0.5;
     o = vec4(-p.z, 0.0, 0.0, 1.0);
-})";
+}
+)";
 
 // 2. Thickness: the chord of every sphere along the ray, added up (additive blending). The sprites
 //    overlap, so every chord is scaled by (particle volume / sprite volume): the sum is then the
@@ -51,7 +56,8 @@ void main() {
     float r2 = dot(c, c);
     if (r2 > 1.0) discard;
     o = vec4(2.0 * uRadius * sqrt(1.0 - r2) * uVolumeScale, 0.0, 0.0, 1.0);
-})";
+}
+)";
 
 // Full-screen triangle without vertex data.
 static const char* kFullScreenVS = R"(
@@ -60,7 +66,8 @@ void main() {
     vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
     uv = p;
     gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
-})";
+}
+)";
 
 // 3. Narrow-range filter, one direction (Truong & Yuksel 2018): Gaussian over the neighbours whose
 //    depth lies within [z - range, z + range] of the pixel; nearer samples (another surface in
@@ -92,7 +99,8 @@ void main() {
         }
     }
     o = vec4(sum / wsum, 0.0, 0.0, 1.0);
-})";
+}
+)";
 
 // 4. Shading of the smoothed surface.
 static const char* kShadeFS = R"(
@@ -155,7 +163,8 @@ void main() {
     o = vec4(c, 1.0);
     vec4 clip = uProj * vec4(P, 1.0);
     gl_FragDepth = clip.z / clip.w * 0.5 + 0.5;
-})";
+}
+)";
 
 // ---------------------------------------------------------------------------
 

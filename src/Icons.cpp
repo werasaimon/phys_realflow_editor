@@ -559,7 +559,153 @@ Draw shapeDraw(rf::ShapeKind k) {
     return [](QPainter&) {};
 }
 
+// ---------------------------------------------------------------------------
+// Many objects: a group and the three patterns of an array
+// ---------------------------------------------------------------------------
+// A small shaded cube with its centre at (x, y), `size` wide (the big cube scaled down).
+void smallCube(QPainter& p, qreal x, qreal y, qreal size, const QColor& c) {
+    p.save();
+    p.translate(x - size / 2, y - size / 2);
+    p.scale(size / 100.0, size / 100.0);
+    drawCube(p, c);
+    p.restore();
+}
+
+void drawObjectIcon(QPainter& p, ObjectIcon kind) {
+    const QColor c(236, 150, 88);
+    switch (kind) {
+    case ObjectIcon::Group: // three cubes and a dashed frame around them
+        p.setPen(QPen(QColor(222, 226, 234), 3, Qt::DashLine, Qt::RoundCap));
+        p.setBrush(Qt::NoBrush);
+        p.drawRoundedRect(QRectF(8, 12, 84, 78), 10, 10);
+        smallCube(p, 34, 64, 40, QColor(90, 150, 234));
+        smallCube(p, 66, 64, 40, QColor(110, 196, 98));
+        smallCube(p, 50, 36, 40, c);
+        break;
+    case ObjectIcon::ArrayLine:
+        for (int i = 0; i < 4; ++i) smallCube(p, 14 + 24 * i, 52, 30, c);
+        break;
+    case ObjectIcon::ArrayGrid:
+        for (int i = 0; i < 9; ++i) smallCube(p, 22 + 28 * (i % 3), 22 + 28 * (i / 3), 26, c);
+        break;
+    case ObjectIcon::ArrayCircle:
+        for (int i = 0; i < 8; ++i) {
+            const qreal a = 6.2831853 * i / 8;
+            smallCube(p, 50 + 34 * std::cos(a), 50 + 34 * std::sin(a), 22, c);
+        }
+        break;
+    case ObjectIcon::Count: break;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Lights and cameras
+// ---------------------------------------------------------------------------
+// The sun: a warm disc and eight rays.
+void drawSun(QPainter& p) {
+    p.setPen(QPen(QColor(255, 196, 64), 7, Qt::SolidLine, Qt::RoundCap));
+    for (int i = 0; i < 8; ++i) {
+        const qreal a = 6.2831853 * i / 8, c = std::cos(a), s = std::sin(a);
+        p.drawLine(QPointF(50 + 31 * c, 50 + 31 * s), QPointF(50 + 44 * c, 50 + 44 * s));
+    }
+    QRadialGradient g(QPointF(43, 43), 30);
+    g.setColorAt(0, QColor(255, 247, 190));
+    g.setColorAt(1, QColor(250, 170, 40));
+    p.setPen(outline(QColor(250, 170, 40)));
+    p.setBrush(g);
+    p.drawEllipse(QPointF(50, 50), 22, 22);
+}
+
+// A lamp: a glowing glass bulb on a threaded base.
+void drawBulb(QPainter& p) {
+    QRadialGradient glow(QPointF(50, 40), 46);
+    glow.setColorAt(0, QColor(255, 230, 120, 110));
+    glow.setColorAt(1, QColor(255, 230, 120, 0));
+    p.setPen(Qt::NoPen);
+    p.setBrush(glow);
+    p.drawEllipse(QPointF(50, 40), 46, 46);
+    QRadialGradient glass(QPointF(42, 30), 34);
+    glass.setColorAt(0, QColor(255, 255, 235));
+    glass.setColorAt(1, QColor(255, 206, 80));
+    QPainterPath bulb;
+    bulb.moveTo(38, 66);
+    bulb.cubicTo(38, 56, 22, 50, 22, 36);
+    bulb.cubicTo(22, 20, 36, 10, 50, 10);
+    bulb.cubicTo(64, 10, 78, 20, 78, 36);
+    bulb.cubicTo(78, 50, 62, 56, 62, 66);
+    bulb.closeSubpath();
+    p.setPen(outline(QColor(230, 170, 60)));
+    p.setBrush(glass);
+    p.drawPath(bulb);
+    p.setBrush(QColor(150, 158, 172));
+    p.setPen(outline(QColor(150, 158, 172)));
+    p.drawRoundedRect(QRectF(37, 66, 26, 20), 4, 4);
+    p.drawLine(QPointF(38, 73), QPointF(62, 73));
+    p.drawLine(QPointF(38, 80), QPointF(62, 80));
+    p.drawEllipse(QPointF(50, 89), 5, 3);
+}
+
+// A spotlight: a dark lamp head at the top left, its cone of light falling to a bright ellipse.
+void drawSpotlight(QPainter& p) {
+    QPainterPath cone;
+    cone.moveTo(30, 30);
+    cone.lineTo(14, 84);
+    cone.arcTo(QRectF(14, 74, 76, 20), 180, 180);
+    cone.lineTo(46, 22);
+    cone.closeSubpath();
+    QLinearGradient light(QPointF(38, 26), QPointF(52, 90));
+    light.setColorAt(0, QColor(255, 226, 120, 220));
+    light.setColorAt(1, QColor(255, 226, 120, 60));
+    p.setPen(Qt::NoPen);
+    p.setBrush(light);
+    p.drawPath(cone);
+    p.setBrush(QColor(255, 240, 170, 200));
+    p.drawEllipse(QRectF(14, 74, 76, 20));
+    const QPointF head[] = {{24, 8}, {50, 2}, {54, 24}, {26, 34}};
+    p.setPen(outline(QColor(120, 128, 142)));
+    p.setBrush(QColor(120, 128, 142));
+    p.drawPolygon(head, 4);
+}
+
+// A camera: a body, two film reels on top, a lens in front.
+void drawCameraIcon(QPainter& p) {
+    const QColor body(98, 108, 124), dark(62, 68, 80);
+    p.setPen(outline(body));
+    p.setBrush(dark);
+    p.drawEllipse(QPointF(30, 26), 14, 14);
+    p.drawEllipse(QPointF(58, 26), 14, 14);
+    QLinearGradient g(QPointF(0, 40), QPointF(0, 82));
+    g.setColorAt(0, shade(body, 130));
+    g.setColorAt(1, shade(body, 75));
+    p.setBrush(g);
+    p.drawRoundedRect(QRectF(10, 40, 62, 42), 7, 7);
+    const QPointF lens[] = {{72, 52}, {94, 40}, {94, 82}, {72, 70}};
+    p.setBrush(dark);
+    p.drawPolygon(lens, 4);
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor(120, 190, 255));
+    p.drawEllipse(QPointF(22, 51), 4, 4);
+}
+
+void drawSceneIcon(QPainter& p, SceneIcon kind) {
+    switch (kind) {
+    case SceneIcon::Sun: drawSun(p); break;
+    case SceneIcon::Bulb: drawBulb(p); break;
+    case SceneIcon::Spot: drawSpotlight(p); break;
+    case SceneIcon::Camera: drawCameraIcon(p); break;
+    case SceneIcon::Count: break;
+    }
+}
+
 } // namespace
+
+QIcon sceneIcon(SceneIcon kind, int size) {
+    return makeIcon(size, [kind](QPainter& p) { drawSceneIcon(p, kind); });
+}
+
+QIcon objectIcon(ObjectIcon kind, int size) {
+    return makeIcon(size, [kind](QPainter& p) { drawObjectIcon(p, kind); });
+}
 
 QIcon shapeIcon(rf::ShapeKind shape, int size) { return makeIcon(size, shapeDraw(shape)); }
 QIcon roleIcon(RoleIcon role, int size) { return makeIcon(size, roleDraw(role)); }
@@ -584,6 +730,16 @@ int dumpIcons(const QString& dir, int size) {
     for (int k = 0; k < int(ControlIcon::Count); ++k) {
         const ControlIcon c = ControlIcon(k);
         save(controls[k], [c](QPainter& p) { drawControl(p, c); });
+    }
+    const char* objects[] = {"group", "array-line", "array-grid", "array-circle"};
+    for (int k = 0; k < int(ObjectIcon::Count); ++k) {
+        const ObjectIcon o = ObjectIcon(k);
+        save(objects[k], [o](QPainter& p) { drawObjectIcon(p, o); });
+    }
+    const char* lights[] = {"light-sun", "light-bulb", "light-spot", "camera"};
+    for (int k = 0; k < int(SceneIcon::Count); ++k) {
+        const SceneIcon o = SceneIcon(k);
+        save(lights[k], [o](QPainter& p) { drawSceneIcon(p, o); });
     }
     return n;
 }

@@ -1,3 +1,6 @@
+// The parameter form (see ParamForm.h): each row is a widget bound to a getter that reads the
+// newest snapshot and a setter posted to the simulation thread. refresh() updates the widgets from a
+// snapshot without sending their changes back; rows after beginAdvanced() show only under "Эксперт".
 #include "ParamForm.h"
 
 #include <QCheckBox>

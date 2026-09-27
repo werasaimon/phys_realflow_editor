@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="560" viewBox="0 0 960 560" role="img" aria-label="Роли: из чего и что ещё делает">
+  <title>Роли: «из чего» и «что ещё делает»</title>
+  <style>
+    .bg { fill: #16181f; }
+    .card { fill: #1f222b; stroke: #333846; stroke-width: 1.5; }
+    .h1 { font: 700 26px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #eef0f5; }
+    .sub { font: 400 15px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #9aa0b0; }
+    .h2 { font: 700 19px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #eef0f5; }
+    .rule { font: 600 15px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
+    .tile { fill: #2a2e3a; stroke: #454b5c; stroke-width: 1.5; }
+    .on { fill: #24406e; stroke: #6fa2ff; stroke-width: 2.5; }
+    .tl { font: 400 14px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #e3e6ee; text-anchor: middle; }
+    .t { font: 400 16px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #e3e6ee; }
+    .eq { font: 700 16px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #f5c542; }
+    .dim { font: 400 14px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #9aa0b0; }
+  </style>
+  <rect class="bg" width="960" height="560" rx="16"/>
+  <text class="h1" x="36" y="50">Роли: из чего сделан объект и что ещё он делает</text>
+  <text class="sub" x="36" y="76">голый объект — только геометрия: он стоит и не участвует в физике</text>
+
+  <!-- из чего -->
+  <rect class="card" x="36" y="100" width="420" height="220" rx="14"/>
+  <text class="h2" x="58" y="132">Из чего</text>
+  <text class="rule" x="58" y="156" fill="#6fa2ff">одно за раз, как переключатель</text>
+  <!-- tiles 4 × 88 -->
+  <rect class="on" x="58" y="176" width="88" height="96" rx="10"/>
+  <path d="M102,196 L124,208 L124,232 L102,244 L80,232 L80,208 Z" fill="#b8bcc8"/><path d="M102,220 L124,208 L124,232 L102,244 Z" fill="#8c91a0"/><path d="M102,220 L80,208 L80,232 L102,244 Z" fill="#a3a8b6"/>
+  <text class="tl" x="102" y="262">Твёрдое</text>
+  <rect class="tile" x="156" y="176" width="88" height="96" rx="10"/>
+  <circle cx="200" cy="220" r="20" fill="#3fbf7f"/><ellipse cx="193" cy="212" rx="7" ry="5" fill="#8ee6b5"/>
+  <text class="tl" x="200" y="262">Мягкое</text>
+  <rect class="tile" x="254" y="176" width="88" height="96" rx="10"/>
+  <path d="M298,196 C308,212 316,222 316,230 A18,18 0 0 1 280,230 C280,222 288,212 298,196 Z" fill="#3e8bff"/>
+  <text class="tl" x="298" y="262">Жидкость</text>
+  <rect class="tile" x="352" y="176" width="88" height="96" rx="10"/>
+  <path d="M376,200 L420,200 L420,242 Q413,236 406,242 Q399,236 392,242 Q385,236 376,242 Z" fill="#e0505e"/>
+  <line x1="372" y1="200" x2="424" y2="200" stroke="#c9cdd8" stroke-width="3"/>
+  <text class="tl" x="396" y="262">Ткань</text>
+  <text class="dim" x="58" y="302">выбрали Мягкое — Твёрдое снимается само</text>
+
+  <!-- что ещё делает -->
+  <rect class="card" x="480" y="100" width="444" height="220" rx="14"/>
+  <text class="h2" x="502" y="132">Что ещё делает</text>
+  <text class="rule" x="502" y="156" fill="#5fd394">сколько угодно, как галочки</text>
+  <rect class="on" x="502" y="176" width="76" height="96" rx="10"/>
+  <rect x="524" y="198" width="32" height="32" rx="4" fill="none" stroke="#5fd394" stroke-width="3"/><path d="M540,206 L550,212 L550,222 L540,228 L530,222 L530,212 Z" fill="#b8bcc8"/>
+  <text class="tl" x="540" y="262" style="font-size:12.5px">Коллайдер</text>
+  <rect class="on" x="586" y="176" width="76" height="96" rx="10"/>
+  <path d="M608,198 L608,218 A16,16 0 0 0 640,218 L640,198 L630,198 L630,218 A6,6 0 0 1 618,218 L618,198 Z" fill="#e0505e"/>
+  <rect x="608" y="196" width="10" height="8" fill="#c9cdd8"/><rect x="630" y="196" width="10" height="8" fill="#c9cdd8"/>
+  <text class="tl" x="624" y="262">Магнит</text>
+  <rect class="tile" x="670" y="176" width="76" height="96" rx="10"/>
+  <circle cx="700" cy="226" r="12" fill="#8c91a0"/><circle cx="716" cy="214" r="10" fill="#a3a8b6"/><circle cx="714" cy="230" r="11" fill="#b8bcc8"/>
+  <text class="tl" x="708" y="262">Дым</text>
+  <rect class="on" x="754" y="176" width="76" height="96" rx="10"/>
+  <path d="M792,196 C802,210 810,218 808,230 A16,16 0 0 1 776,230 C774,220 784,214 786,204 C790,210 792,212 792,196 Z" fill="#ff7a2e"/><path d="M792,214 C798,222 800,228 798,234 A6,6 0 0 1 786,234 C785,228 790,224 792,214 Z" fill="#ffd05a"/>
+  <text class="tl" x="792" y="262">Горит</text>
+  <rect class="tile" x="838" y="176" width="76" height="96" rx="10"/>
+  <rect x="871" y="196" width="10" height="36" rx="5" fill="#e3e6ee"/><circle cx="876" cy="236" r="9" fill="#e0505e"/><rect x="874" y="212" width="4" height="24" fill="#e0505e"/>
+  <text class="tl" x="876" y="262">Тепло</text>
+  <text class="dim" x="502" y="302">Коллайдер — не материал: это «чем сталкивается»</text>
+
+  <!-- recipes -->
+  <rect class="card" x="36" y="340" width="888" height="196" rx="14"/>
+  <text class="h2" x="58" y="372">Рецепты</text>
+  <text class="t" x="58" y="408">Куб</text><text class="eq" x="100" y="408">+</text><text class="t" x="118" y="408">Твёрдое</text><text class="eq" x="186" y="408">+</text><text class="t" x="204" y="408">Коллайдер</text>
+  <text class="eq" x="300" y="408">=</text><text class="t" x="322" y="408">падает, отскакивает, катится</text>
+  <text class="t" x="58" y="442">Куб</text><text class="eq" x="100" y="442">+</text><text class="t" x="118" y="442">Коллайдер</text>
+  <text class="eq" x="300" y="442">=</text><text class="t" x="322" y="442">неподвижная стена, пол или горка</text>
+  <text class="t" x="58" y="476">Сфера</text><text class="eq" x="114" y="476">+</text><text class="t" x="132" y="476">Мягкое</text>
+  <text class="eq" x="300" y="476">=</text><text class="t" x="322" y="476">желейный мяч</text>
+  <text class="t" x="58" y="510">Плоскость</text><text class="eq" x="140" y="510">+</text><text class="t" x="158" y="510">Ткань</text><text class="eq" x="214" y="510">+</text><text class="t" x="232" y="510">Горит</text>
+  <text class="eq" x="300" y="510">=</text><text class="t" x="322" y="510">штора, которая загорается от пламени</text>
+  <text class="dim" x="640" y="408">Твёрдое само добавляет</text>
+  <text class="dim" x="640" y="428">коллайдер «Авто»</text>
+  <text class="dim" x="640" y="476">Дым, Горит и Тепло сами</text>
+  <text class="dim" x="640" y="496">включают воздух</text>
+</svg>

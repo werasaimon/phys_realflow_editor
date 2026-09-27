@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="440" viewBox="0 0 960 440" role="img" aria-label="Правка, Пуск, Пауза, Стоп">
+  <title>Правка → Пуск → Пауза → Стоп</title>
+  <defs>
+    <marker id="arrowG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 Z" fill="#3fbf7f"/></marker>
+    <marker id="arrowY" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 Z" fill="#f5c542"/></marker>
+    <marker id="arrowR" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 Z" fill="#ff5a6e"/></marker>
+  </defs>
+  <style>
+    .bg { fill: #16181f; }
+    .h1 { font: 700 26px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #eef0f5; }
+    .sub { font: 400 15px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #9aa0b0; }
+    .name { font: 700 22px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #eef0f5; }
+    .t { font: 400 15px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #c9cdd8; }
+    .lab { font: 600 15px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; }
+    .note { font: 600 16px 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; fill: #16181f; }
+  </style>
+  <rect class="bg" width="960" height="440" rx="16"/>
+  <text class="h1" x="36" y="50">Правка → Пуск → Пауза → Стоп</text>
+  <text class="sub" x="36" y="76">как в Unity, Unreal и Blender: сначала рисуете, потом оживляете, Стоп возвращает всё назад</text>
+
+  <!-- Правка -->
+  <rect x="36" y="110" width="250" height="150" rx="14" fill="#1f2a44" stroke="#4f8cff" stroke-width="2.5"/>
+  <g transform="translate(62,138)">
+    <path d="M0,22 L16,6 L22,12 L6,28 L0,28 Z" fill="#6fa2ff"/>
+    <rect x="17" y="0" width="9" height="9" rx="2" transform="rotate(45 21 5)" fill="#6fa2ff"/>
+  </g>
+  <text class="name" x="102" y="162">Правка</text>
+  <text class="t" x="56" y="196">физика стоит</text>
+  <text class="t" x="56" y="218">кнопки создают только геометрию</text>
+  <text class="t" x="56" y="240">гизмо, роли, числа — всё можно</text>
+
+  <!-- Игра -->
+  <rect x="372" y="110" width="250" height="150" rx="14" fill="#16352a" stroke="#3fbf7f" stroke-width="2.5"/>
+  <path d="M396,136 L396,166 L422,151 Z" fill="#3fbf7f"/>
+  <text class="name" x="436" y="162">Игра</text>
+  <text class="t" x="392" y="196">физика идёт</text>
+  <text class="t" x="392" y="218">роли и числа меняются на лету</text>
+  <text class="t" x="392" y="240">мышь хватает и бросает тела</text>
+
+  <!-- Пауза -->
+  <rect x="708" y="110" width="216" height="150" rx="14" fill="#3a3217" stroke="#f5c542" stroke-width="2.5"/>
+  <rect x="732" y="137" width="9" height="28" rx="2" fill="#f5c542"/>
+  <rect x="747" y="137" width="9" height="28" rx="2" fill="#f5c542"/>
+  <text class="name" x="770" y="162">Пауза</text>
+  <text class="t" x="728" y="196">стоп-кадр</text>
+  <text class="t" x="728" y="218">«.» — один шаг</text>
+  <text class="t" x="728" y="240">гизмо работает</text>
+
+  <!-- Правка → Игра -->
+  <line x1="290" y1="160" x2="366" y2="160" stroke="#3fbf7f" stroke-width="3" marker-end="url(#arrowG)"/>
+  <text class="lab" x="328" y="148" text-anchor="middle" fill="#5fd394">Пуск</text>
+  <text class="lab" x="328" y="184" text-anchor="middle" fill="#9aa0b0" style="font-weight:400">пробел</text>
+
+  <!-- Игра ⇄ Пауза -->
+  <line x1="626" y1="146" x2="702" y2="146" stroke="#f5c542" stroke-width="3" marker-end="url(#arrowY)"/>
+  <line x1="702" y1="198" x2="626" y2="198" stroke="#3fbf7f" stroke-width="3" marker-end="url(#arrowG)"/>
+  <text class="lab" x="664" y="136" text-anchor="middle" fill="#f5c542">пауза</text>
+  <text class="lab" x="664" y="174" text-anchor="middle" fill="#9aa0b0" style="font-weight:400">пробел</text>
+  <text class="lab" x="664" y="220" text-anchor="middle" fill="#5fd394">дальше</text>
+
+  <!-- Стоп: back to Правка -->
+  <path d="M816,264 L816,316 Q816,332 800,332 L177,332 Q161,332 161,316 L161,268" fill="none" stroke="#ff5a6e" stroke-width="3" marker-end="url(#arrowR)"/>
+  <line x1="497" y1="264" x2="497" y2="332" stroke="#ff5a6e" stroke-width="3"/>
+  <rect x="330" y="316" width="300" height="34" rx="17" fill="#16181f" stroke="#ff5a6e" stroke-width="2"/>
+  <rect x="348" y="325" width="16" height="16" rx="2" fill="#ff5a6e"/>
+  <text class="lab" x="376" y="339" fill="#ff7a93">Стоп · Esc или Shift+пробел</text>
+
+  <rect x="36" y="370" width="888" height="50" rx="12" fill="#ff7a93"/>
+  <text class="note" x="480" y="401" text-anchor="middle">Стоп возвращает сцену такой, какой она была до Пуска. Правки во время игры не сохраняются.</text>
+</svg>

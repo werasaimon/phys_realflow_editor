@@ -44,6 +44,7 @@ const char* shapeName(ShapeKind k) {
 SceneBuilder::SceneBuilder(SimController* ctrl, QObject* parent) : QObject(parent), ctrl_(ctrl) {
     lastRemember_.start();
     buildActions();
+    buildLightActions();
     buildSceneList();
     buildInspector();
     fillWorld();
@@ -72,46 +73,95 @@ std::string entityText(const Entity& e) {
     one.entities.push_back(e);
     return one.save();
 }
+std::string arrayText(const ArrayObject& a) {
+    SceneGraph one;
+    one.arrays.push_back(a);
+    return one.save();
+}
 std::string worldText(const SceneGraph& g) {
     SceneGraph world;
     world.world = g.world;
     return world.save();
 }
+std::string lightsText(const SceneGraph& g) {
+    SceneGraph lights;
+    lights.lights = g.lights;
+    lights.cameras = g.cameras;
+    return lights.save();
+}
+std::string groupsText(const SceneGraph& g) {
+    SceneGraph groups;
+    groups.groups = g.groups;
+    return groups.save();
+}
 bool samePose(const Entity& a, const Entity& b) {
     return a.position.x == b.position.x && a.position.y == b.position.y && a.position.z == b.position.z &&
            a.rotationDeg.x == b.rotationDeg.x && a.rotationDeg.y == b.rotationDeg.y && a.rotationDeg.z == b.rotationDeg.z;
+}
+
+// What an edit changed, compared with what the simulation was last given.
+struct PlayChanges {
+    std::vector<std::pair<Entity, bool>> entities; // the entity and whether the editor moved it
+    std::vector<uint32_t> removed;
+    std::vector<ArrayObject> arrays;               // changed or new; a removed one with no copies
+    bool empty() const { return entities.empty() && removed.empty() && arrays.empty(); }
+};
+
+PlayChanges playChanges(const SceneGraph& now, const SceneGraph& before) {
+    PlayChanges c;
+    for (const Entity& e : now.entities) {
+        const Entity* old = nullptr;
+        for (const Entity& s : before.entities)
+            if (s.id == e.id) old = &s;
+        if (!old || entityText(*old) != entityText(e)) c.entities.push_back({e, !old || !samePose(*old, e)});
+    }
+    for (const Entity& s : before.entities)
+        if (std::none_of(now.entities.begin(), now.entities.end(), [&](const Entity& e) { return e.id == s.id; })) c.removed.push_back(s.id);
+    for (const ArrayObject& a : now.arrays) {
+        const ArrayObject* old = nullptr;
+        for (const ArrayObject& s : before.arrays)
+            if (s.id == a.id) old = &s;
+        if (!old || arrayText(*old) != arrayText(a)) c.arrays.push_back(a);
+    }
+    for (ArrayObject gone : before.arrays) {
+        if (std::any_of(now.arrays.begin(), now.arrays.end(), [&](const ArrayObject& a) { return a.id == gone.id; })) continue;
+        gone.count[0] = gone.count[1] = gone.count[2] = 0; // no copies: its bodies go
+        c.arrays.push_back(gone);
+    }
+    return c;
 }
 } // namespace
 
 // An edit while the simulation runs: the objects that differ from what the simulation was last
 // given are rebuilt in place between frames (added, removed), the rest runs on untouched. An object
 // the editor did not move keeps its live pose and velocity (the simulation's own pose is sent back,
-// so the SDK sees it unmoved). The world itself needs a reload: the builder stops and says why.
+// so the SDK sees it unmoved). An array is rebuilt as a whole (its copies that stay keep moving).
+// The world itself and the groups need a reload: the builder stops and says why.
 void SceneBuilder::applyEditDuringPlay(uint32_t entityId) {
     (void)entityId; // every changed object is found by comparing, whichever edit made it
     if (worldText(graph_) != worldText(simGraph_))
         return reloadNeeded("Тяжесть, коробку и газ меняют только перезапуском сцены");
-    std::vector<std::pair<Entity, bool>> changed; // the entity and whether the editor moved it
-    std::vector<uint32_t> removed;
-    for (const Entity& e : graph_.entities) {
-        const Entity* before = nullptr;
-        for (const Entity& s : simGraph_.entities)
-            if (s.id == e.id) before = &s;
-        if (!before || entityText(*before) != entityText(e)) changed.push_back({e, !before || !samePose(*before, e)});
+    if (groupsText(graph_) != groupsText(simGraph_)) return reloadNeeded("Группы меняют только перезапуском сцены");
+    refreshLightsAndCameras();
+    if (lightsText(graph_) != lightsText(simGraph_)) { // the physics never sees them: the next snapshot shows them
+        const std::vector<Light> lights = graph_.lights;
+        const std::vector<Camera> cameras = graph_.cameras;
+        ctrl_->post([lights, cameras](Simulation& s) {
+            if (auto* scene = dynamic_cast<GraphScene*>(s.scene())) scene->setLightsAndCameras(lights, cameras);
+        });
     }
-    for (const Entity& s : simGraph_.entities)
-        if (indexOf(s.id) < 0) removed.push_back(s.id);
+    const PlayChanges changes = playChanges(graph_, simGraph_);
     simGraph_ = graph_;
     refreshScenery(); // a shape that lost (or has no) role is still drawn
-    if (changed.empty() && removed.empty()) return;
+    if (changes.empty()) return;
     QPointer<SceneBuilder> self(this);
-    ctrl_->post([changed, removed, self](Simulation& s) {
+    ctrl_->post([changes, self](Simulation& s) {
         auto* scene = dynamic_cast<GraphScene*>(s.scene());
         if (!scene) return;
         bool ok = true;
-        for (uint32_t id : removed) scene->removeEntity(s, id);
+        for (uint32_t id : changes.removed) scene->removeEntity(s, id);
         std::vector<std::pair<uint32_t, std::pair<Vector3, Vector3>>> poses;
-        for (const auto& [entity, moved] : changed) {
+        for (const auto& [entity, moved] : changes.entities) {
             Entity e = entity;
             for (const Entity& held : scene->graph().entities) // unmoved: the pose the scene holds, so it keeps the live one
                 if (held.id == e.id && !moved) e.position = held.position, e.rotationDeg = held.rotationDeg;
@@ -119,8 +169,9 @@ void SceneBuilder::applyEditDuringPlay(uint32_t entityId) {
             for (const Entity& held : scene->graph().entities)
                 if (held.id == e.id) poses.push_back({e.id, {held.position, held.rotationDeg}});
         }
+        for (const ArrayObject& a : changes.arrays) ok = scene->rebuildArray(s, a) && ok;
         std::vector<uint32_t> bodyEntity(s.rigid.bodies().size(), 0);
-        for (size_t b = 0; b < bodyEntity.size(); ++b) bodyEntity[b] = scene->entityIdOfBody(int(b));
+        for (size_t b = 0; b < bodyEntity.size(); ++b) bodyEntity[b] = scene->objectIdOfBody(int(b));
         QMetaObject::invokeMethod(self, [self, ok, bodyEntity, poses] {
             if (self) self->onPlayEditApplied(ok, bodyEntity, poses);
         }, Qt::QueuedConnection);
@@ -138,7 +189,7 @@ void SceneBuilder::onPlayEditApplied(bool ok, const std::vector<uint32_t>& bodyE
                 if (e.id == id) e.position = pose.first, e.rotationDeg = pose.second;
     bodyEntity_ = bodyEntity;
     sendViewportFlags();
-    if (const Entity* e = selectedEntity()) showTransform(*e);
+    if (const SceneObject* o = selectedObject()) showTransform(*o);
     if (!ok) reloadNeeded("Включение газа требует перезапуска сцены");
 }
 
@@ -222,19 +273,32 @@ bool SceneBuilder::importModel(const QString& path, QString& error) {
     return true;
 }
 
+// The eye and the lock of any object (the list, the context menu).
 void SceneBuilder::toggleVisible(uint32_t id) {
-    editEntity(id, [](Entity& e) { e.visible = !e.visible; });
+    if (!objectById(id)) return;
+    prepareEdit(id);
+    remember();
+    objectById(id)->visible = !objectById(id)->visible;
+    refreshList();
+    fillInspector();
+    applyEdit(id);
 }
 
 void SceneBuilder::toggleLocked(uint32_t id) {
-    editEntity(id, [](Entity& e) { e.locked = !e.locked; });
-    if (const Entity* e = selectedEntity(); e && e->locked) setSelected(0); // a locked thing is not edited
+    if (!objectById(id)) return;
+    prepareEdit(id);
+    remember();
+    objectById(id)->locked = !objectById(id)->locked;
+    refreshList();
+    if (objectById(id)->locked && isSelected(id)) setSelected(0); // a locked thing is not edited
+    else fillInspector();
+    applyEdit(id);
 }
 
 void SceneBuilder::frameSelected() {
-    const Entity* e = selectedEntity();
-    if (!e) return frameObjects();
-    AABB box = editView_.worldBounds(graph_, *e);
+    AABB box;
+    for (uint32_t id : selection_) box.expand(boundsOf(id));
+    if (!box.valid()) return frameObjects();
     const Vector3 margin(std::max(0.15f, 0.4f * maxComp(box.extent())));
     emit frameRequested(AABB(box.lo - margin, box.hi + margin));
 }
@@ -252,20 +316,27 @@ void SceneBuilder::editEntity(uint32_t id, const std::function<void(Entity&)>& c
 // ---------------------------------------------------------------------------
 // Roles: one click turns the shape into a model; the role switches on what it needs
 // ---------------------------------------------------------------------------
+// On every selected shape at once (an instance: its master, so all its instances): added to all
+// unless all have it, then taken from all.
 void SceneBuilder::toggleRole(RoleIcon role) {
-    if (!selectedEntity()) {
+    if (selectedEntities().empty()) {
         emit statusMessage("Сначала выберите объект — или создайте его кнопкой сверху");
         return;
     }
     prepareEdit(selectedId_);
-    Entity* e = selectedEntity();
     remember();
-    const bool on = !roleEnabled(*e, role);
-    if (on && isMadeOfRole(role)) // made of one thing at a time
-        for (RoleIcon other : {RoleIcon::Rigid, RoleIcon::Soft, RoleIcon::Liquid, RoleIcon::Cloth}) setRole(*e, other, false);
-    setRole(*e, role, on);
-    keepComponentsConsistent(*e, role, on);
-    if (on) switchOnWhatRoleNeeds(*e, role);
+    std::vector<uint32_t> masters;
+    for (Entity* e : selectedEntities())
+        if (std::find(masters.begin(), masters.end(), masterOf(e->id)) == masters.end()) masters.push_back(masterOf(e->id));
+    const bool on = !std::all_of(masters.begin(), masters.end(), [&](uint32_t id) { return roleEnabled(*entityById(id), role); });
+    for (uint32_t id : masters) {
+        Entity& e = *entityById(id);
+        if (on && isMadeOfRole(role)) // made of one thing at a time
+            for (RoleIcon other : {RoleIcon::Rigid, RoleIcon::Soft, RoleIcon::Liquid, RoleIcon::Cloth}) setRole(e, other, false);
+        setRole(e, role, on);
+        keepComponentsConsistent(e, role, on);
+        if (on) switchOnWhatRoleNeeds(e, role);
+    }
     fillInspector();
     refreshList();
     applyEdit(selectedId_);
@@ -321,25 +392,8 @@ void SceneBuilder::keepComponentsConsistent(Entity& e, RoleIcon role, bool on) {
 // ---------------------------------------------------------------------------
 // Edits from the widgets
 // ---------------------------------------------------------------------------
-void SceneBuilder::onObjectEdited() {
-    if (filling_ || !selectedEntity()) return;
-    prepareEdit(selectedId_);
-    remember(true);
-    object_->writeTo(*selectedEntity());
-    refreshList();
-    refreshHeader();
-    applyEdit(selectedId_);
-}
-
-void SceneBuilder::onDetailsEdited() {
-    if (filling_ || !selectedEntity()) return;
-    prepareEdit(selectedId_);
-    remember(true);
-    readDetails(*selectedEntity());
-    refreshList();
-    refreshHeader();
-    applyEdit(selectedId_);
-}
+void SceneBuilder::onObjectEdited() { applyWidgetEdit(false); }
+void SceneBuilder::onDetailsEdited() { applyWidgetEdit(true); }
 
 void SceneBuilder::onWorldEdited() {
     if (filling_) return;
@@ -355,13 +409,12 @@ void SceneBuilder::onWorldEdited() {
 // The eye and the lock are clicked right in the list; any other column selects the row.
 void SceneBuilder::onListClicked(QTreeWidgetItem* item, int column) {
     const uint32_t id = item->data(0, Qt::UserRole).toUInt();
-    if (indexOf(id) < 0) return;
-    if (column == 1 || column == 2) {
+    if (!objectById(id)) return;
+    if (column == 1) return toggleVisible(id);
+    if (column == 2) {
         prepareEdit(id);
         remember();
-        Entity& e = graph_.entities[size_t(indexOf(id))];
-        if (column == 1) e.visible = !e.visible;
-        else e.locked = !e.locked;
+        objectById(id)->locked = !objectById(id)->locked;
         refreshList();
         fillInspector();
         applyEdit(id);
@@ -406,7 +459,7 @@ void SceneBuilder::redo() {
 
 void SceneBuilder::restore(SceneGraph g) {
     graph_ = std::move(g);
-    if (indexOf(selectedId_) < 0) selectedId_ = 0;
+    pruneSelection();
     lastRemember_.restart();
     fillWorld();
     refreshList();
@@ -433,6 +486,7 @@ void SceneBuilder::setMode(Mode m) {
                                  "■ Стоп вернёт сцену, какой она была до ▶.");
     if (editing()) refreshView();
     else refreshColliderGuides(); // the play-mode lines come with the next snapshot
+    refreshLightsAndCameras();
     refreshScenery();
     sendViewportFlags();
     updateGizmoTarget();
@@ -494,8 +548,9 @@ void SceneBuilder::returnToEdit(bool keepEdits) {
         const bool edited = playBackup_.save() != graph_.save();
         graph_ = playBackup_;
         undo_.resize(std::min(undo_.size(), undoAtPlay_));
+        if (hasKeptBefore_) undo_.push_back(keptBefore_); // K: one Ctrl+Z puts the objects back
         redo_.clear();
-        if (indexOf(selectedId_) < 0) selectedId_ = 0;
+        pruneSelection();
         fillWorld();
         refreshList();
         fillInspector();
@@ -503,6 +558,7 @@ void SceneBuilder::returnToEdit(bool keepEdits) {
         if (edited) emit statusMessage("Стоп: сцена вернулась к той, что была до ▶ (правки во время игры не сохраняются — как в Unity)");
     }
     hasPlayBackup_ = false;
+    hasKeptBefore_ = false;
     sample_ = false;
     setMode(Mode::Edit);
 }
@@ -520,7 +576,7 @@ void SceneBuilder::loadIntoSimulation() {
         scene->name = name;
         s.load(std::move(scene)); // the scene stays alive inside the simulation
         std::vector<uint32_t> bodyEntity(s.rigid.bodies().size(), 0);
-        for (size_t b = 0; b < bodyEntity.size(); ++b) bodyEntity[b] = built->entityIdOfBody(int(b));
+        for (size_t b = 0; b < bodyEntity.size(); ++b) bodyEntity[b] = built->objectIdOfBody(int(b));
         QMetaObject::invokeMethod(self, [self, bodyEntity] {
             if (self) self->onBodiesMapped(bodyEntity);
         }, Qt::QueuedConnection);
@@ -536,11 +592,10 @@ void SceneBuilder::refreshScenery() {
     if (!editing() && !sample_) {
         std::vector<uint32_t> ids;
         const auto snap = editView_.snapshot(graph_, displayName(), ids);
-        for (size_t i = 0; i < ids.size(); ++i) { // everything that gets no body: role-less shapes, a burner, a nozzle
-            const int e = indexOf(ids[i]);
-            if (e >= 0 && !madeOfSomething(graph_.entities[size_t(e)]) && !graph_.entities[size_t(e)].magnet.enabled)
-                scenery.push_back(snap->bodies[i]);
-        }
+        std::map<uint32_t, bool> noBody; // everything that gets no body: role-less shapes, a burner, a nozzle
+        for (const Entity& w : worldEntities(graph_)) noBody[w.id] = !madeOfSomething(w) && !w.magnet.enabled;
+        for (size_t i = 0; i < ids.size(); ++i)
+            if (noBody[ids[i]]) scenery.push_back(snap->bodies[i]);
     }
     emit sceneryBodies(std::move(scenery));
 }
@@ -551,6 +606,7 @@ void SceneBuilder::refreshView() {
     sendViewportFlags();
     updateGizmoTarget();
     refreshColliderGuides();
+    refreshLightsAndCameras();
 }
 
 void SceneBuilder::onBodiesMapped(const std::vector<uint32_t>& bodyEntity) {
@@ -564,11 +620,11 @@ void SceneBuilder::onBodiesMapped(const std::vector<uint32_t>& bodyEntity) {
 // which small magnets would be dots. After that the camera is free until the next load or add.
 void SceneBuilder::frameObjects() {
     AABB mine, all;
-    for (const Entity& e : graph_.entities) {
-        if (!e.visible) continue;
-        const AABB box = editView_.worldBounds(graph_, e);
+    for (const Entity& w : worldEntities(graph_)) {
+        if (!w.visible) continue;
+        const AABB box = editView_.worldBounds(graph_, w);
         all.expand(box);
-        if (!e.locked) mine.expand(box);
+        if (!w.locked) mine.expand(box);
     }
     AABB box = mine.valid() ? mine : all;
     if (!box.valid()) return;
@@ -582,17 +638,23 @@ void SceneBuilder::frameObjects() {
 
 // The viewport outlines the selected thing's bodies (and in edit mode the one under the mouse and
 // the geometry without a role) and lets the mouse pass through locked ones.
+// A body belongs to what its drawn id says: a shape, an array's copy, a glued group (while playing);
+// it is outlined when that, or a group or an array it is in, is selected.
 void SceneBuilder::sendViewportFlags() {
     std::vector<int> selected, hovered, ghosts;
     std::vector<char> unpickable(bodyEntity_.size(), 0);
+    std::map<uint32_t, const Entity*> drawn;
+    const std::vector<Entity> world = worldEntities(graph_);
+    for (const Entity& w : world) drawn[w.id] = &w;
     for (size_t b = 0; b < bodyEntity_.size(); ++b) {
         const uint32_t id = bodyEntity_[b];
-        const int i = indexOf(id);
-        if (i < 0) continue;
-        if (isSelected(id)) selected.push_back(int(b));
-        else if (id == hoverId_ && editing()) hovered.push_back(int(b));
-        if (editing() && entityIsGeometryOnly(graph_.entities[size_t(i)])) ghosts.push_back(int(b));
-        unpickable[b] = graph_.entities[size_t(i)].locked;
+        const SceneObject* owner = findObject(graph_, ownerOf(id));
+        if (!owner) continue;
+        if (drawnSelected(id)) selected.push_back(int(b));
+        else if (editing() && isInside(ownerOf(id), hoverId_)) hovered.push_back(int(b));
+        const auto w = drawn.find(id);
+        if (editing() && w != drawn.end() && entityIsGeometryOnly(*w->second)) ghosts.push_back(int(b));
+        unpickable[b] = w != drawn.end() ? w->second->locked : owner->locked;
     }
     emit highlightBodies(selected);
     emit hoverBodies(hovered);
@@ -600,12 +662,15 @@ void SceneBuilder::sendViewportFlags() {
     emit unpickableBodies(unpickable);
 }
 
+// The gizmo sits on the active object's world pose (a group: its centre, an array: its first copy).
 void SceneBuilder::updateGizmoTarget() {
-    const Entity* e = selectedEntity();
-    const bool editable = gizmoAllowed() && e && e->visible && !e->locked;
+    const SceneObject* o = findObject(graph_, selectedId_);
+    const bool editable = gizmoAllowed() && o && effectivelyVisible(graph_, *o) && !o->locked;
     const bool live = !editing() && liveTargetValid_ && !gizmoEntity_;
-    emit gizmoTarget(editable, e ? (live ? liveTarget_ : e->position) : Vector3(0.0f),
-                     e ? quaternionFromEulerDeg(e->rotationDeg) : Quaternion());
+    Vector3 p(0.0f);
+    Quaternion q;
+    if (o) worldPose(graph_, *o, p, q);
+    emit gizmoTarget(editable, live ? liveTarget_ : p, q);
 }
 
 // On pause the gizmo sits where the selected object's body is now, not where it was put.
@@ -634,9 +699,19 @@ uint32_t SceneBuilder::entityOfBody(int body) const {
 // ---------------------------------------------------------------------------
 // The mouse in the viewport
 // ---------------------------------------------------------------------------
+// Each hit is what a click there selects (a group before its members), each thing once, nearest first.
 std::vector<PickHit> SceneBuilder::pickAll(const Ray& ray) {
     if (!editing()) return {};
-    return editView_.pickAll(graph_, ray);
+    std::vector<PickHit> hits, all = editView_.pickAll(graph_, ray);
+    for (const PickHit& h : pickMarkers(ray)) all.push_back(h); // lights and cameras: their wireframes
+    std::sort(all.begin(), all.end(), [](const PickHit& a, const PickHit& b) { return a.t < b.t; });
+    for (PickHit h : all) {
+        h.id = clickTarget(h.id);
+        if (h.id == 0 || std::any_of(hits.begin(), hits.end(), [&](const PickHit& o) { return o.id == h.id; })) continue;
+        h.name = objectTitle(h.id).toStdString();
+        hits.push_back(h);
+    }
+    return hits;
 }
 
 void SceneBuilder::onEntityClicked(uint32_t id) {
@@ -651,9 +726,10 @@ void SceneBuilder::onEntityHovered(uint32_t id) {
 
 void SceneBuilder::selectBody(int body) {
     if (body < 0 || body >= int(bodyEntity_.size())) return;
-    const int i = indexOf(bodyEntity_[size_t(body)]);
-    if (i < 0 || graph_.entities[size_t(i)].locked) return;
-    setSelected(graph_.entities[size_t(i)].id);
+    const uint32_t id = clickTarget(bodyEntity_[size_t(body)]);
+    const SceneObject* o = findObject(graph_, id);
+    if (!o || o->locked) return;
+    setSelected(id);
 }
 
 // ---------------------------------------------------------------------------
@@ -663,7 +739,9 @@ void SceneBuilder::newScene() {
     if (!editing()) returnToEdit(false);
     if (!graph_.entities.empty()) remember();
     graph_ = SceneGraph();
+    selection_.clear();
     fileName_.clear();
+    throughId_ = 0;
     Entity floor;
     floor.id = newId();
     floor.name = "Пол";
@@ -700,6 +778,8 @@ bool SceneBuilder::openFile(const QString& path, QString& error) {
     graph_.baseDirectory = QFileInfo(path).absolutePath().toStdString(); // model files next to the scene
     adoptIds();
     fileName_ = QFileInfo(path).fileName();
+    throughId_ = 0;
+    selection_.clear();
     selectedId_ = 0;
     fillWorld();
     refreshList();
@@ -736,9 +816,16 @@ Entity* SceneBuilder::selectedEntity() {
 
 uint32_t SceneBuilder::newId() { return nextId_++; }
 
+// After an undo or a Stop: what is gone from the graph is gone from the selection too.
+void SceneBuilder::pruneSelection() {
+    selection_.erase(std::remove_if(selection_.begin(), selection_.end(), [this](uint32_t id) { return !findObject(graph_, id); }),
+                     selection_.end());
+    if (!isSelected(selectedId_)) selectedId_ = selection_.empty() ? 0 : selection_.back();
+}
+
 // Files written by hand or by an older editor may have no ids, or the same id twice.
 void SceneBuilder::adoptIds() {
-    for (const Entity& e : graph_.entities) nextId_ = std::max(nextId_, e.id + 1);
+    nextId_ = std::max(nextId_, nextId(graph_)); // groups and arrays too
     std::set<uint32_t> seen;
     for (Entity& e : graph_.entities) {
         if (e.id == 0 || seen.count(e.id)) e.id = newId();
