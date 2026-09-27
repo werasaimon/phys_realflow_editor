@@ -1,5 +1,9 @@
 #pragma once
-// Orbit camera around a target point + screen-to-world ray unprojection.
+// The camera: an eye looking at a target point from yaw / pitch at a distance, and the screen-to-world
+// ray under a pixel. Besides the plain orbit around its target it turns around any point (the one
+// under the cursor, as Blender's "orbit around selection" and Maya's tumble on a point: that point
+// stays where it is on screen), zooms towards the point under the cursor, flies (the eye and the
+// target move together) and looks along an axis (the navigation cube's views).
 
 #include "math/Math.h"
 
@@ -23,9 +27,23 @@ public:
     float fovDeg() const { return fov_; }
     float distance() const { return distance_; }
 
+    float yaw() const { return yaw_; }
+    float pitch() const { return pitch_; }
+    QVector3D target() const { return target_; }
+
     void rotate(float dxPixels, float dyPixels);
+    // Turns the eye around `pivot` by the same angles as rotate(): the view turns with it, so the
+    // pivot keeps its place on screen. Around the eye itself it is looking about (flying).
+    void orbitAround(const QVector3D& pivot, float dxPixels, float dyPixels);
     void pan(float dxPixels, float dyPixels);
     void zoom(float wheelSteps);
+    // Zoom by wheel steps towards `point` (the point under the cursor): it stays under the cursor.
+    void zoomToward(const QVector3D& point, float wheelSteps);
+    // Moves the eye and the target together (flying), in world units.
+    void translate(const QVector3D& delta) { target_ += delta; }
+    // Looks along a direction (the view's forward), keeping the target: the axis views.
+    void lookAlong(const QVector3D& forward);
+    QVector3D right() const; // the screen's right in the world
     // Fit the whole box in view; yaw/pitch in degrees.
     void frame(const rf::AABB& box, float yawDeg, float pitchDeg);
 

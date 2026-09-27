@@ -28,6 +28,43 @@ void OrbitCamera::rotate(float dx, float dy) {
     pitch_ = std::clamp(pitch_ + dy * 0.4f, -89.0f, 89.0f);
 }
 
+// dir(yaw, pitch) points from the target to the eye. A yaw step turns every offset from the pivot
+// about the world's up axis; a pitch step turns it about the horizontal axis at right angles to the
+// view (Rodrigues' formula), so the eye, the target and the view direction turn as one.
+void OrbitCamera::orbitAround(const QVector3D& pivot, float dx, float dy) {
+    const float dyaw = dx * 0.4f;
+    const float newPitch = std::clamp(pitch_ + dy * 0.4f, -89.0f, 89.0f), dpitch = newPitch - pitch_;
+    QVector3D v = eye() - pivot;
+    const float a = qDegreesToRadians(dyaw), ca = std::cos(a), sa = std::sin(a);
+    v = QVector3D(v.x() * ca - v.z() * sa, v.y(), v.x() * sa + v.z() * ca);
+    yaw_ += dyaw;
+    const float yr = qDegreesToRadians(yaw_);
+    const QVector3D axis(-std::sin(yr), 0.0f, std::cos(yr)); // horizontal, across the view
+    const float b = qDegreesToRadians(dpitch), cb = std::cos(b), sb = std::sin(b);
+    v = v * cb + QVector3D::crossProduct(axis, v) * sb + axis * QVector3D::dotProduct(axis, v) * (1.0f - cb);
+    pitch_ = newPitch;
+    const QVector3D eyeNow = pivot + v;
+    target_ = eyeNow - (eye() - target_); // eye() - target_ is the new direction times the distance
+}
+
+QVector3D OrbitCamera::right() const {
+    const QMatrix4x4 v = view();
+    return QVector3D(v(0, 0), v(0, 1), v(0, 2));
+}
+
+void OrbitCamera::zoomToward(const QVector3D& point, float steps) {
+    const float before = distance_;
+    zoom(steps);
+    const float k = distance_ / before; // the eye keeps its direction: the point stays under the cursor
+    target_ = point + (target_ - point) * k;
+}
+
+void OrbitCamera::lookAlong(const QVector3D& forward) {
+    const QVector3D d = -forward.normalized(); // from the target to the eye
+    pitch_ = std::clamp(qRadiansToDegrees(std::asin(std::clamp(d.y(), -1.0f, 1.0f))), -89.0f, 89.0f);
+    if (std::fabs(d.x()) + std::fabs(d.z()) > 1e-4f) yaw_ = qRadiansToDegrees(std::atan2(d.z(), d.x()));
+}
+
 void OrbitCamera::pan(float dx, float dy) {
     QMatrix4x4 v = view();
     QVector3D right(v(0, 0), v(0, 1), v(0, 2)), up(v(1, 0), v(1, 1), v(1, 2));

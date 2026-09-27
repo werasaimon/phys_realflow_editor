@@ -14,6 +14,7 @@
 #include <QToolTip>
 #include <QWheelEvent>
 
+#include <algorithm>
 #include <cmath>
 
 using rf::Vector3;
@@ -59,6 +60,10 @@ QColor Viewport::colormapColor(int map, float t) {
 Viewport::Viewport(QWidget* parent) : QOpenGLWidget(parent) {
     setFocusPolicy(Qt::StrongFocus);
     setMinimumSize(320, 240);
+    setMouseTracking(true); // the navigation cube and the hints follow the mouse
+    flyTimer_ = new QTimer(this);
+    flyTimer_->setInterval(15);
+    connect(flyTimer_, &QTimer::timeout, this, &Viewport::flyTick);
 }
 
 Viewport::~Viewport() {
@@ -229,213 +234,6 @@ void Viewport::initializeGL() {
 }
 
 void Viewport::resizeGL(int, int) {}
-
-// ---------------------------------------------------------------------------
-// Camera & interaction
-// ---------------------------------------------------------------------------
-void Viewport::frameScene() {
-    if (focusBox_.valid()) {
-        camera_.frame(focusBox_, 40.0f, 24.0f);
-        update();
-        return;
-    }
-    if (!snap_ || !snap_->domain.valid()) return;
-    // Voxel/vector scenes look straight at the Z slice; others use a 3/4 view.
-    if (snap_->vis.gridDisplay > 0 || snap_->vis.vectorDisplay > 0) camera_.frame(snap_->domain, 90.0f, 12.0f);
-    else camera_.frame(snap_->domain, snap_->mode == rf::SimMode::WindTunnel ? 60.0f : 55.0f, 22.0f);
-    update();
-}
-
-ViewportTool& Viewport::toolFor(Qt::MouseButton button, const QPointF& pos) {
-    if (editMode_) return editTool_; // the scene builder's edit mode: select, gizmo, camera
-    // LMB is the disturbance ray wherever there is gas to disturb - unless it hits a rigid body,
-    // which it then grabs; the camera lives on the wheel.
-    bool gas = snap_ && snap_->mode == rf::SimMode::WindTunnel;
-    if (button == Qt::LeftButton && gas) {
-        int body;
-        Vector3 hit;
-        const Ray ray = camera_.screenRay(pos, size());
-        if (!snap_->bodies.empty() && pickBody(ray, body, hit)) return grabTool_;
-        if (pickParticle(ray, hit)) return grabTool_; // cloth / soft body
-        return disturbTool_;
-    }
-    if (button == Qt::LeftButton && snap_ && (!snap_->bodies.empty() || !snap_->cloths.empty() || !snap_->softMeshes.empty()))
-        return grabTool_;
-    // Liquid / soft bodies / cloth: LMB grabs a particle (empty space still orbits).
-    if (button == Qt::LeftButton && snap_ && snap_->mode == rf::SimMode::Fluid) return grabTool_;
-    return orbitTool_;
-}
-
-void Viewport::mousePressEvent(QMouseEvent* e) {
-    if (!editMode_ && !grabbed_ && e->button() == Qt::LeftButton && !(e->modifiers() & Qt::ShiftModifier)) {
-        int body;
-        Vector3 hit;
-        if (pickAnyBody(camera_.screenRay(e->position(), size()), body, hit)) emit bodyClicked(body);
-    }
-    if (!grabbed_) grabbed_ = &toolFor(e->button(), e->position());
-    grabbed_->press(*this, e);
-}
-
-void Viewport::mouseMoveEvent(QMouseEvent* e) {
-    lastMouse_ = e->position();
-    if (grabbed_) grabbed_->move(*this, e);
-    else if (editMode_) editTool_.move(*this, e); // hover, or a keyboard transform following the mouse
-}
-
-void Viewport::mouseReleaseEvent(QMouseEvent* e) {
-    if (grabbed_) grabbed_->release(*this, e);
-    if (e->buttons() == Qt::NoButton) grabbed_ = nullptr;
-}
-
-void Viewport::wheelEvent(QWheelEvent* e) {
-    camera_.zoom(e->angleDelta().y() / 120.0f);
-    update();
-}
-
-void Viewport::mouseDoubleClickEvent(QMouseEvent*) { frameScene(); }
-
-void Viewport::keyPressEvent(QKeyEvent* e) {
-    if (gizmo_.modal() && modalKey(e)) return;
-    if (gizmo_.dragging()) { // a handle drag: Esc cancels, other keys wait
-        if (e->key() == Qt::Key_Escape) cancelGizmoDrag();
-        return;
-    }
-    if (editMode_ && !gizmo_.dragging()) { // Blender's keys: G move, Shift+R turn, Shift+S scale
-        const Qt::KeyboardModifiers mods = e->modifiers() & (Qt::ShiftModifier | Qt::ControlModifier | Qt::AltModifier);
-        if (e->key() == Qt::Key_G && mods == Qt::NoModifier) return startModal(GizmoMode::Translate);
-        if (e->key() == Qt::Key_R && mods == Qt::ShiftModifier) return startModal(GizmoMode::Rotate);
-        if (e->key() == Qt::Key_S && mods == Qt::ShiftModifier) return startModal(GizmoMode::Scale);
-    }
-    if (e->key() == Qt::Key_F) frameScene();
-    else QOpenGLWidget::keyPressEvent(e);
-}
-
-bool Viewport::event(QEvent* e) {
-    if (e->type() == QEvent::ShortcutOverride && gizmo_.dragging()) {
-        e->accept(); // X, Esc, digits... belong to the transform, not to the window's shortcuts
-        return true;
-    }
-    return QOpenGLWidget::event(e);
-}
-
-// ---------------------------------------------------------------------------
-// Edit mode: picking, the gizmo, keyboard transforms
-// ---------------------------------------------------------------------------
-void Viewport::setEditMode(bool on) {
-    if (!on) cancelModal();
-    editMode_ = on;
-    setMouseTracking(on);
-    if (!on) {
-        gizmo_.setHover(GizmoHandle::None);
-        hoveredEntity_ = 0;
-        hoverBodies_.clear();
-        ghostBodies_.clear();
-    }
-    update();
-}
-
-void Viewport::setGizmoTarget(bool visible, const Vector3& position, const rf::Quaternion& rotation) {
-    gizmoVisible_ = visible;
-    gizmo_.setTarget(position, rotation);
-    update();
-}
-
-uint32_t Viewport::pickEntity(const Ray& ray, Vector3* hit) const {
-    const std::vector<PickHit> hits = pickAll(ray);
-    if (hits.empty()) return 0;
-    if (hit) *hit = hits.front().point;
-    return hits.front().id;
-}
-
-void Viewport::setHoveredEntity(uint32_t id) {
-    if (id == hoveredEntity_) return;
-    hoveredEntity_ = id;
-    emit entityHovered(id);
-}
-
-// The objects on the ray, nearest first. Clicking the same spot again within 1.5 s (the camera
-// unmoved) takes the next one; Alt+click always does. A hint at the cursor says "2 / 3: name".
-uint32_t Viewport::clickSelect(const QPointF& pos, bool next) {
-    const std::vector<PickHit> hits = pickAll(camera_.screenRay(pos, size()));
-    std::vector<uint32_t> ids;
-    for (const PickHit& h : hits) ids.push_back(h.id);
-    const bool sameSpot = lastClickTime_.isValid() && lastClickTime_.elapsed() < 1500 && QLineF(pos, lastClickPos_).length() <= 4 &&
-                          camera_.view() == lastClickView_;
-    int i = 0;
-    if (!ids.empty() && ids == lastClickHits_ && lastClickIndex_ >= 0 && (sameSpot || next)) i = (lastClickIndex_ + 1) % int(ids.size());
-    else if (next && ids.size() > 1) i = 1;
-    lastClickPos_ = pos;
-    lastClickTime_.start();
-    lastClickView_ = camera_.view();
-    lastClickHits_ = ids;
-    lastClickIndex_ = ids.empty() ? -1 : i;
-    if (ids.size() > 1)
-        QToolTip::showText(mapToGlobal(pos.toPoint()) + QPoint(16, 8), QString("%1 / %2: %3").arg(i + 1).arg(ids.size()).arg(QString::fromStdString(hits[size_t(i)].name)), this);
-    else
-        QToolTip::hideText();
-    const uint32_t id = ids.empty() ? 0 : ids[size_t(i)];
-    emit entityClicked(id);
-    return id;
-}
-
-void Viewport::startModal(GizmoMode m) {
-    if (!editMode_ || !gizmoVisible_ || gizmo_.dragging()) return;
-    const QPointF p = mapFromGlobal(QCursor::pos());
-    gizmo_.beginModal(m, gizmoView(), rf::Vector2(float(p.x()), float(p.y())));
-    typed_.clear();
-    emit gizmoStarted();
-    update();
-}
-
-void Viewport::finishModal() {
-    if (!gizmo_.modal()) return;
-    gizmo_.end();
-    typed_.clear();
-    emit gizmoFinished();
-    update();
-}
-
-void Viewport::cancelModal() {
-    if (!gizmo_.modal()) return;
-    gizmo_.end();
-    typed_.clear();
-    emit gizmoCancelled();
-    update();
-}
-
-void Viewport::cancelGizmoDrag() {
-    if (!gizmo_.dragging() || gizmo_.modal()) return;
-    gizmo_.end();
-    emit gizmoCancelled();
-    update();
-}
-
-void Viewport::modalDrag() {
-    const QPointF p = mapFromGlobal(QCursor::pos());
-    const bool snap = QGuiApplication::keyboardModifiers() & Qt::ControlModifier;
-    emit gizmoMoved(gizmo_.drag(gizmoView(), rf::Vector2(float(p.x()), float(p.y())), snap));
-    update();
-}
-
-// During a keyboard transform: X / Y / Z limit it to an axis, digits type the amount, Enter
-// confirms, Esc cancels; every other key is swallowed.
-bool Viewport::modalKey(QKeyEvent* e) {
-    const int k = e->key();
-    if (k == Qt::Key_Escape) cancelModal();
-    else if (k == Qt::Key_Return || k == Qt::Key_Enter) finishModal();
-    else if (k == Qt::Key_X || k == Qt::Key_Y || k == Qt::Key_Z) {
-        gizmo_.constrainModal(k - Qt::Key_X, gizmoView());
-        modalDrag();
-    } else if (k == Qt::Key_Backspace || (e->text().size() == 1 && QString("0123456789.,-").contains(e->text()))) {
-        if (k == Qt::Key_Backspace) typed_.chop(1);
-        else typed_ += e->text() == "," ? QString(".") : e->text();
-        bool ok = false;
-        const float value = typed_.toFloat(&ok);
-        gizmo_.setTyped(ok, value);
-        modalDrag();
-    }
-    return true;
-}
 
 bool Viewport::pickPoint(const Ray& ray, Vector3& hit) const {
     if (!snap_ || snap_->mode != rf::SimMode::WindTunnel || !snap_->domain.valid()) return false;
@@ -1391,6 +1189,8 @@ void Viewport::drawHeatSource(const QMatrix4x4& vp) {
     drawLines(d, GL_LINES, vp, QVector4D(1.0f, 0.6f, 0.15f, 1.0f), 1);
 }
 
+// One frame: the GL state and the background, then the floor and the world box, the scene, the
+// diagnostic and editing overlays on top, and the 2D overlay last.
 void Viewport::paintGL() {
     if (!glOk_) {
         QPainter p(this);
@@ -1400,8 +1200,21 @@ void Viewport::paintGL() {
                    QString("OpenGL 3.0 недоступен (%1).\nЗапустите с ключом --software-gl — рендер на процессоре.").arg(renderer_));
         return;
     }
+    beginFrame();
+    if (!snap_) return;
+    const QMatrix4x4 view = viewMatrix(), proj = projMatrix(), vp = proj * view;
+    drawFloorAndDomain(vp);
+    drawScene(view, proj);
+    drawOverlays3D(vp);
+    glBindVertexArray(0);
+    glUseProgram(0);
+    if (overlayVisible_) drawOverlay();
+    countFrame();
+}
+
+// QPainter (the 2D overlay) may have changed the GL state during the previous frame: set it again.
+void Viewport::beginFrame() {
     glViewport(0, 0, int(width() * devicePixelRatioF()), int(height() * devicePixelRatioF()));
-    // QPainter (overlay) may have changed state during the previous frame.
     glEnable(GL_DEPTH_TEST);
     glDepthMask(GL_TRUE);
     glDepthFunc(GL_LESS);
@@ -1413,46 +1226,45 @@ void Viewport::paintGL() {
     glClearColor(0.1f, 0.11f, 0.13f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     drawBackground();
-    if (!snap_) return;
+}
 
-    const QMatrix4x4 view = viewMatrix(), proj = projMatrix(), vp = proj * view;
+// The floor grid and the world box. In the builder's scenes the box is only its floor rectangle,
+// faint: the camera often stands inside the box, and its vertical edges would cut across the view.
+void Viewport::drawFloorAndDomain(const QMatrix4x4& vp) {
     const rf::AABB& d = snap_->domain;
-
-    // Floor grid and domain box.
-    if (showFloor_ && d.valid()) {
+    if (!d.valid()) return;
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    if (showFloor_) {
         std::vector<float> g;
-        float y = d.lo.y;
-        Vector3 c = d.center(), e = d.extent();
-        float half = std::max(e.x, e.z) * 1.0f;
-        float step = std::pow(10.0f, std::floor(std::log10(half))) * 0.5f;
-        int n = int(half / step);
+        const float y = d.lo.y;
+        const Vector3 c = d.center(), e = d.extent();
+        const float half = std::max(e.x, e.z) * 1.0f;
+        const float step = std::pow(10.0f, std::floor(std::log10(half))) * 0.5f;
+        const int n = int(half / step);
         for (int i = -n; i <= n; ++i) {
-            float o = i * step;
+            const float o = i * step;
             g.insert(g.end(), {c.x + o, y, c.z - n * step, 0, c.x + o, y, c.z + n * step, 0});
             g.insert(g.end(), {c.x - n * step, y, c.z + o, 0, c.x + n * step, y, c.z + o, 0});
         }
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         drawLines(g, GL_LINES, vp, QVector4D(0.5f, 0.55f, 0.62f, 0.18f), 1);
-        glDisable(GL_BLEND);
     }
-    if (showDomain_ && d.valid()) {
-        // The world box. In the builder's scenes only its floor rectangle, faint: the camera often
-        // stands inside the box, and its vertical edges would cut across the whole view.
+    if (showDomain_) {
         std::vector<float> b;
-        Vector3 lo = d.lo, hi = d.hi;
         Vector3 c[8];
-        for (int i = 0; i < 8; ++i) c[i] = Vector3((i & 1) ? hi.x : lo.x, (i & 2) ? hi.y : lo.y, (i & 4) ? hi.z : lo.z);
+        for (int i = 0; i < 8; ++i) c[i] = Vector3((i & 1) ? d.hi.x : d.lo.x, (i & 2) ? d.hi.y : d.lo.y, (i & 4) ? d.hi.z : d.lo.z);
         const int edges[12][2] = {{0, 1}, {4, 5}, {0, 4}, {1, 5}, {2, 3}, {6, 7}, {2, 6}, {3, 7}, {0, 2}, {1, 3}, {4, 6}, {5, 7}};
         const int count = authoring_ ? 4 : 12; // the first four are the floor's
         for (int k = 0; k < count; ++k)
             b.insert(b.end(), {c[edges[k][0]].x, c[edges[k][0]].y, c[edges[k][0]].z, 0, c[edges[k][1]].x, c[edges[k][1]].y, c[edges[k][1]].z, 0});
-        glEnable(GL_BLEND);
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
         drawLines(b, GL_LINES, vp, authoring_ ? QVector4D(0.62f, 0.72f, 0.9f, 0.3f) : QVector4D(0.45f, 0.65f, 0.95f, 1.0f), 1);
-        glDisable(GL_BLEND);
     }
+    glDisable(GL_BLEND);
+}
 
+// What the simulation holds: obstacle, bodies, particles, cloth, water, flow lines, smoke.
+void Viewport::drawScene(const QMatrix4x4& view, const QMatrix4x4& proj) {
+    const QMatrix4x4 vp = proj * view;
     drawObstacle(view, proj);
     drawBodies(view, proj);
     drawParticles(view, proj);
@@ -1470,7 +1282,10 @@ void Viewport::paintGL() {
     drawSlice(vp);
     drawVolume(vp, eyePosition());
     drawVesselGlass(view, proj);
-    // Diagnostic overlays go on top of the smoke so they stay readable.
+}
+
+// Diagnostic overlays go on top of the smoke so they stay readable; then the editing aids.
+void Viewport::drawOverlays3D(const QMatrix4x4& vp) {
     drawVoxelGrid(vp);
     drawVectors(vp, eyePosition());
     drawProbe(vp);
@@ -1478,21 +1293,50 @@ void Viewport::paintGL() {
     drawDebugProbe(vp);
     drawGrab(vp);
     drawHighlight(vp);
+    drawColliderGuides(vp);
     drawGizmo(vp);
-
-    // Emitter / heat source markers.
-    if (snap_->mode == rf::SimMode::Fluid && snap_->emitter.enabled) {
+    if (snap_->mode == rf::SimMode::Fluid && snap_->emitter.enabled) { // the liquid nozzle's direction
         const auto& em = snap_->emitter;
-        Vector3 a = em.position, b2 = em.position + rf::normalize(em.direction) * 0.15f;
-        drawLines({a.x, a.y, a.z, 0, b2.x, b2.y, b2.z, 0}, GL_LINES, vp, QVector4D(1, 0.8f, 0.2f, 1), 1);
+        const Vector3 a = em.position, b = em.position + rf::normalize(em.direction) * 0.15f;
+        drawLines({a.x, a.y, a.z, 0, b.x, b.y, b.z, 0}, GL_LINES, vp, QVector4D(1, 0.8f, 0.2f, 1), 1);
     }
+}
 
-    glBindVertexArray(0);
-    glUseProgram(0);
-    drawOverlay();
+void Viewport::setColliderGuides(std::vector<float> lines) {
+    for (auto& part : guidesByState_) part.clear();
+    for (size_t i = 0; i + 8 <= lines.size(); i += 8) { // one segment: two points of x y z state
+        const int state = std::clamp(int(lines[i + 3]), 0, 2);
+        guidesByState_[state].insert(guidesByState_[state].end(), lines.begin() + long(i), lines.begin() + long(i + 8));
+    }
+    colliderGuides_ = std::move(lines);
+    update();
+}
 
+// The collider wireframes (Houdini's collision guide) where they are in front of the geometry, and
+// faintly where the geometry hides them, so a barrel around a sphere reads whole. Pale green: a
+// body that moves; grey: a fixed obstacle; dim green: a body the solver put to sleep.
+void Viewport::drawColliderGuides(const QMatrix4x4& vp) {
+    if (colliderGuides_.empty()) return;
+    const QVector4D colours[3] = {{0.486f, 1.0f, 0.604f, 0.7f}, {0.74f, 0.76f, 0.80f, 0.6f}, {0.486f, 1.0f, 0.604f, 0.3f}};
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
+    for (int state = 0; state < 3; ++state) {
+        QVector4D faint = colours[state];
+        faint.setW(faint.w() * 0.55f); // a collider sits inside its geometry: the hidden part must still read
+        glDepthFunc(GL_GREATER); // hidden parts first, faint
+        drawLines(guidesByState_[state], GL_LINES, vp, faint, 1);
+        glDepthFunc(GL_LEQUAL);
+        drawLines(guidesByState_[state], GL_LINES, vp, colours[state], 1);
+    }
+    glDepthFunc(GL_LESS);
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
+}
+
+void Viewport::countFrame() {
     ++fpsFrames_;
-    qint64 now = QDateTime::currentMSecsSinceEpoch();
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
     if (now - fpsLast_ > 1000) {
         fps_ = fpsFrames_ * 1000.0f / float(now - fpsLast_);
         fpsFrames_ = 0;
@@ -1546,6 +1390,8 @@ void Viewport::drawOverlay() {
     const bool cpu = softwareRenderer();
     if (editMode_)
         p.drawText(14, 42, editCaption_);
+    else if (!showStats_)
+        p.drawText(14, 42, QString("t = %1 с").arg(snap_->time, 0, 'f', 2));
     else
         p.drawText(14, 42, QString("t = %1 с   ·   расчёт %2 мс/кадр   ·   рендер %3 fps (%4)")
                                .arg(snap_->time, 0, 'f', 3)
@@ -1578,31 +1424,21 @@ void Viewport::drawOverlay() {
     p.end();
 }
 
-// The small axis cross at the bottom left and the line of mouse hints next to it.
+// The navigation cube in the top-right corner, the selection box while it is drawn, and the live
+// amount of a drag next to the cursor. What the buttons do is in the status bar (hintChanged).
 void Viewport::drawAxesAndHints(QPainter& p) {
-    const int H = height();
-    QMatrix4x4 v = viewMatrix();
-    QPointF o(52, H - 52);
-    const QVector3D axes[3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
-    const QColor cols[3] = {QColor(235, 90, 90), QColor(110, 220, 110), QColor(100, 150, 255)};
-    const char* names[3] = {"X", "Y", "Z"};
-    for (int i = 0; i < 3; ++i) {
-        QVector3D a = v.mapVector(axes[i]);
-        QPointF e = o + QPointF(a.x(), -a.y()) * 32;
-        p.setPen(QPen(cols[i], 2.2));
-        p.drawLine(o, e);
-        p.drawText(e + QPointF(3, 4), names[i]);
-    }
+    navCube_.draw(p, viewMatrix(), size(), navPressed_ ? navPressHit_ : navHover_);
     if (editMode_) {
-        p.setPen(QColor(170, 176, 188));
-        p.drawText(90, H - 12, "ЛКМ — выбрать (ещё раз — то, что позади) · W / E / R — двигать / вращать / масштаб · G — за мышью, X Y Z — ось, "
-                               "число — точно · Ctrl — шаг · Shift+ЛКМ — по полу · F — показать");
+        drawSelectionBox(p);
         drawEditLabel(p);
-    } else if (snap_->mode == rf::SimMode::WindTunnel) {
-        p.setPen(QColor(170, 176, 188));
-        p.drawText(14, H - 12, "ЛКМ по телу — схватить, по газу — возмущение  ·  колесо зажато — вращение, Shift+колесо / ПКМ — сдвиг, прокрутка — масштаб  ·  F — показать всё");
-    } else {
-        p.setPen(QColor(170, 176, 188));
-        p.drawText(90, H - 12, "ЛКМ по телу — схватить и тащить, ЛКМ по пустоте / колесо зажато — вращение, Shift+колесо / ПКМ — сдвиг, прокрутка — масштаб");
     }
+}
+
+void Viewport::drawSelectionBox(QPainter& p) {
+    if (!editTool_.boxSelecting()) return;
+    p.save();
+    p.setPen(QPen(QColor(120, 180, 255), 1.0, Qt::DashLine));
+    p.setBrush(QColor(64, 150, 255, 40));
+    p.drawRect(editTool_.boxRect());
+    p.restore();
 }

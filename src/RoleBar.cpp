@@ -1,7 +1,8 @@
-// The role bar (see RoleBar.h): eight checkable picture buttons in two rows of four.
+// The role bar (see RoleBar.h): picture buttons in two rows - four "made of", then the collider
+// and the four "also does" - and the helpers that read and set a component on an entity.
 #include "RoleBar.h"
 
-#include <QGridLayout>
+#include <QBoxLayout>
 #include <QLabel>
 #include <QSignalBlocker>
 #include <QToolButton>
@@ -9,7 +10,7 @@
 namespace {
 
 const char* kTips[] = {
-    "Твёрдое тело: не гнётся; падает, сталкивается, катится",
+    "Твёрдое тело: не гнётся; падает, сталкивается, катится (сталкивается своим коллайдером)",
     "Мягкое тело: гнётся и пружинит, как желе",
     "Жидкость: форма заполняется водой",
     "Ткань: плоскость становится полотном — висит, развевается, рвётся",
@@ -17,14 +18,35 @@ const char* kTips[] = {
     "Дым: оставляет дымный след, куда бы ни летела форма (включит газ)",
     "Горит: загорается от пламени и горит (включит газ)",
     "Тепло: горячее пятно, воздух над ним поднимается (включит газ)",
+    "Коллайдер: чем форма сталкивается. Один — неподвижное препятствие; вместе с «Твёрдым» — движущееся тело",
 };
+
+QToolButton* roleButton(RoleIcon role) {
+    auto* b = new QToolButton;
+    b->setCheckable(true);
+    b->setIcon(roleIcon(role, 36));
+    b->setIconSize(QSize(36, 36));
+    b->setText(roleName(role));
+    b->setToolTip(roleTip(role));
+    b->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+    b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    b->setObjectName("roleButton");
+    return b;
+}
 
 } // namespace
 
 QString roleName(RoleIcon role) {
-    const char* names[] = {"Твёрдое", "Мягкое", "Жидкость", "Ткань", "Магнит", "Дым", "Горит", "Тепло"};
+    const char* names[] = {"Твёрдое", "Мягкое", "Жидкость", "Ткань", "Магнит", "Дым", "Горит", "Тепло", "Коллайдер"};
     return names[int(role)];
 }
+
+QString roleTitle(RoleIcon role) {
+    const char* titles[] = {"Твёрдое тело", "Мягкое тело", "Жидкость", "Ткань", "Магнит", "Излучатель", "Горит", "Тепло", "Коллайдер"};
+    return titles[int(role)];
+}
+
+QString roleTip(RoleIcon role) { return kTips[int(role)]; }
 
 bool isMadeOfRole(RoleIcon role) { return int(role) <= int(RoleIcon::Cloth); }
 
@@ -38,35 +60,47 @@ bool roleEnabled(const rf::Entity& e, RoleIcon role) {
     case RoleIcon::Smoke: return e.emitter.enabled;
     case RoleIcon::Flame: return e.flammable.enabled;
     case RoleIcon::Heat: return e.heat.enabled;
+    case RoleIcon::Collider: return e.collider.enabled;
     case RoleIcon::Count: break;
     }
     return false;
 }
 
-RoleBar::RoleBar(QWidget* parent) : QWidget(parent) {
-    auto* grid = new QGridLayout(this);
-    grid->setContentsMargins(0, 0, 0, 0);
-    grid->setSpacing(4);
-    auto* madeOf = new QLabel("из чего");
-    auto* alsoDoes = new QLabel("что ещё делает");
-    for (QLabel* l : {madeOf, alsoDoes}) l->setObjectName("roleRowLabel");
-    grid->addWidget(madeOf, 0, 0, 1, 4);
-    grid->addWidget(alsoDoes, 2, 0, 1, 4);
-    for (int k = 0; k < int(RoleIcon::Count); ++k) {
-        const RoleIcon role = RoleIcon(k);
-        auto* b = new QToolButton;
-        b->setCheckable(true);
-        b->setIcon(roleIcon(role, 40));
-        b->setIconSize(QSize(40, 40));
-        b->setText(roleName(role));
-        b->setToolTip(kTips[k]);
-        b->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-        b->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        b->setObjectName("roleButton");
-        connect(b, &QToolButton::clicked, this, [this, role] { emit roleClicked(role); });
-        buttons_[k] = b;
-        grid->addWidget(b, isMadeOfRole(role) ? 1 : 3, k % 4);
+void setRole(rf::Entity& e, RoleIcon role, bool on) {
+    switch (role) {
+    case RoleIcon::Rigid: e.rigid.enabled = on; break;
+    case RoleIcon::Soft: e.soft.enabled = on; break;
+    case RoleIcon::Liquid: e.liquid.enabled = on; break;
+    case RoleIcon::Cloth: e.cloth.enabled = on; break;
+    case RoleIcon::Magnet: e.magnet.enabled = on; break;
+    case RoleIcon::Smoke: e.emitter.enabled = on; break;
+    case RoleIcon::Flame: e.flammable.enabled = on; break;
+    case RoleIcon::Heat: e.heat.enabled = on; break;
+    case RoleIcon::Collider: e.collider.enabled = on; break;
+    case RoleIcon::Count: break;
     }
+}
+
+RoleBar::RoleBar(QWidget* parent) : QWidget(parent) {
+    auto* col = new QVBoxLayout(this);
+    col->setContentsMargins(0, 0, 0, 0);
+    col->setSpacing(4);
+    auto row = [this, col](const QString& title, std::initializer_list<RoleIcon> roles) {
+        auto* label = new QLabel(title);
+        label->setObjectName("roleRowLabel");
+        col->addWidget(label);
+        auto* line = new QHBoxLayout;
+        line->setSpacing(4);
+        for (RoleIcon role : roles) {
+            QToolButton* b = roleButton(role);
+            connect(b, &QToolButton::clicked, this, [this, role] { emit roleClicked(role); });
+            buttons_[int(role)] = b;
+            line->addWidget(b);
+        }
+        col->addLayout(line);
+    };
+    row("из чего", {RoleIcon::Rigid, RoleIcon::Soft, RoleIcon::Liquid, RoleIcon::Cloth});
+    row("чем сталкивается и что ещё делает", {RoleIcon::Collider, RoleIcon::Magnet, RoleIcon::Smoke, RoleIcon::Flame, RoleIcon::Heat});
 }
 
 void RoleBar::setRoles(const rf::Entity& e) {

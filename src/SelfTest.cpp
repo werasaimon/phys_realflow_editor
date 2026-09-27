@@ -1,5 +1,6 @@
 // The scene builder's self-test (see SelfTest.h). Each check prints one line, as rf_tests does.
 #include "SelfTest.h"
+#include "SelfTestSupport.h"
 
 #include "Gizmo.h"
 #include "MainWindow.h"
@@ -23,41 +24,9 @@
 #include <set>
 
 using namespace rf;
+using namespace selftest;
 
 namespace {
-
-struct Checker {
-    int failures = 0;
-    void check(bool ok, const char* what) {
-        std::printf("[%s] %s\n", ok ? " OK " : "FAIL", what);
-        std::fflush(stdout);
-        failures += ok ? 0 : 1;
-    }
-};
-
-// Lets the window work for a while: events, the simulation's snapshots, painting.
-void pump(int ms) {
-    QElapsedTimer t;
-    t.start();
-    do {
-        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-        QThread::msleep(2);
-    } while (t.elapsed() < ms);
-}
-
-// Presses the role button with this label (the role bar's own button, as a mouse click would).
-void clickRole(QMainWindow& w, RoleIcon role) {
-    for (QToolButton* b : w.findChildren<QToolButton*>("roleButton"))
-        if (b->text() == roleName(role)) b->click();
-}
-
-void trigger(QMainWindow& w, const char* action) {
-    if (auto* a = w.findChild<QAction*>(action)) a->trigger();
-}
-
-const Entity& last(const SceneBuilder& b) { return b.graph().entities.back(); }
-
-bool same(const Vector3& a, const Vector3& b) { return a.x == b.x && a.y == b.y && a.z == b.z; }
 
 bool idsUnique(const SceneGraph& g) {
     std::set<uint32_t> ids;
@@ -65,13 +34,6 @@ bool idsUnique(const SceneGraph& g) {
         if (e.id == 0 || !ids.insert(e.id).second) return false;
     return true;
 }
-
-void sendMouse(Viewport* v, QEvent::Type type, const QPointF& p, Qt::MouseButton button, Qt::MouseButtons buttons) {
-    QMouseEvent e(type, p, v->mapToGlobal(p), button, buttons, Qt::NoModifier);
-    QCoreApplication::sendEvent(v, &e);
-}
-
-QPointF toPoint(const Vector2& p) { return QPointF(p.x, p.y); }
 
 // A pixel where the gizmo reports this handle: along the arrows, then around the rings.
 Vector2 handlePoint(const Gizmo& g, const GizmoView& v, GizmoHandle want) {
@@ -211,24 +173,17 @@ void testKeyboardTransform(Checker& c) {
 // ---------------------------------------------------------------------------
 // The builder in the window
 // ---------------------------------------------------------------------------
-bool waitFrames(Viewport* v, uint64_t frames, int timeoutMs) {
-    QElapsedTimer t;
-    t.start();
-    while (t.elapsed() < timeoutMs) {
-        pump(40);
-        if (v->snapshot() && v->snapshot()->frame >= frames) return true;
-    }
-    return false;
-}
-
 void testEditPlayStop(Checker& c, QMainWindow& w, SceneBuilder& b, Viewport* v) {
     b.newScene();
     pump(100);
-    c.check(b.editing() && b.graph().entities.size() == 1 && b.graph().entities[0].locked, "a new scene is a locked floor, in edit mode");
+    const Entity& floor = b.graph().entities[0];
+    c.check(b.editing() && b.graph().entities.size() == 1 && floor.locked && floor.collider.enabled && !floor.rigid.enabled,
+            "a new scene is a locked floor with a collider only (a fixed obstacle), in edit mode");
     b.createActions()[0]->trigger(); // Куб
     const Entity cube = last(b);
-    c.check(b.graph().entities.size() == 2 && cube.shape == ShapeKind::Box && entityIsGeometryOnly(cube) && std::fabs(cube.position.y - 0.1f) < 1e-6f,
-            "the cube button makes geometry only: no role, standing on the floor");
+    c.check(b.graph().entities.size() == 2 && cube.shape == ShapeKind::Box && entityIsGeometryOnly(cube) &&
+                std::fabs(cube.position.y - (0.8f + 0.5f * cube.size.y)) < 1e-6f,
+            "the cube button makes geometry only: no component, hanging 0.8 m above the floor (ready to fall)");
     pump(700);
     c.check(b.editing() && same(last(b).position, cube.position) && v->snapshot()->bodies.size() == 2 &&
                 same(v->snapshot()->bodies[1].pos, cube.position), "edit mode: the cube does not move (nothing is simulated)");
@@ -339,11 +294,18 @@ void testLiveEdit(Checker& c, QMainWindow& w, SceneBuilder& b, Viewport* v) {
         e.position.y = 2.0f;
         e.liquid.enabled = true;
     });
+    // Paused right after the start, while the water is surely in the air: the simulation thread of a
+    // small scene runs faster than real time, so waiting for drawn frames (or even 0.05 s of
+    // simulated time) let the water land before the pause arrived.
     b.play();
-    waitFrames(v, 3, 15000);
+    b.pause();
+    pump(200);
     const size_t water = v->snapshot()->particles.size() + v->snapshot()->liquid.size();
+    float waterLowest = 1e9f;
+    for (const Vector3& p : v->snapshot()->liquid) waterLowest = std::min(waterLowest, p.y);
+    for (const Vector3& p : v->snapshot()->particles) waterLowest = std::min(waterLowest, p.y);
     const int floorBody = b.bodyOfEntity(floor);
-    clickRole(w, RoleIcon::Soft); // the inspector stays live while the scene plays
+    clickRole(w, RoleIcon::Soft); // the inspector stays live during play (and pause)
     QElapsedTimer waited; // the change reaches the simulation between two of its frames
     waited.start();
     while (v->snapshot()->softMeshes.empty() && waited.elapsed() < 10000) pump(30);
@@ -352,11 +314,12 @@ void testLiveEdit(Checker& c, QMainWindow& w, SceneBuilder& b, Viewport* v) {
     float lowest = 1e9f;
     for (const auto& m : s.softMeshes)
         for (const Vector3& p : m.positions) lowest = std::min(lowest, p.y);
-    std::printf("  playing: water particles %zu -> %zu, soft bodies %zu (lowest point y = %.2f m), floor body %d -> %d\n", water, waterAfter,
-                s.softMeshes.size(), double(lowest), floorBody, b.bodyOfEntity(floor));
-    c.check(water > 0 && waterAfter < water && !s.softMeshes.empty() && lowest > 0.5f && b.bodyOfEntity(floor) == floorBody &&
-                b.mode() == SceneBuilder::Mode::Playing,
-            "while playing, a falling water cube turns into jelly in mid-air; nothing else is rebuilt");
+    std::printf("  paused in the air: water particles %zu -> %zu (its lowest point y = %.2f m), soft bodies %zu (lowest point y = %.2f m), floor body %d -> %d\n",
+                water, waterAfter, double(waterLowest), s.softMeshes.size(), double(lowest), floorBody, b.bodyOfEntity(floor));
+    // The jelly takes the water's place: its lowest point where the water's was (within 0.1 m), in the air.
+    c.check(water > 0 && waterAfter < water && !s.softMeshes.empty() && waterLowest > 0.5f && std::fabs(lowest - waterLowest) < 0.1f &&
+                b.bodyOfEntity(floor) == floorBody,
+            "during play, a falling water cube turns into jelly in mid-air at the water's place; nothing else is rebuilt");
     b.stop();
     pump(300);
     const Entity& back = last(b);
@@ -414,13 +377,13 @@ void sceneShots(QMainWindow& w, SceneBuilder& b, Viewport* v, const QString& dir
     b.editEntity(last(b).id, [](Entity& e) { e.size = Vector3(1.2f, 0.02f, 1.2f); e.position = Vector3(1.4f, 0.03f, -0.4f); });
     clickRole(w, RoleIcon::Cloth);
     for (const Entity& e : b.graph().entities)
-        if (e.shape == ShapeKind::Box || e.shape == ShapeKind::Sphere) b.editEntity(e.id, [](Entity& x) { x.rigid.enabled = true; x.position.y += 0.8f; });
+        if (e.shape == ShapeKind::Box || e.shape == ShapeKind::Sphere) b.editEntity(e.id, [](Entity& x) { x.rigid.enabled = true; x.collider.enabled = true; });
     b.select(b.graph().entities[1].id);
     pump(500);
-    w.grab().save(dir + "/edit.png");
+    windowShot(w).save(dir + "/edit.png");
     b.play();
     waitFrames(v, 90, 20000);
-    w.grab().save(dir + "/play.png");
+    windowShot(w).save(dir + "/play.png");
     b.stop();
     pump(200);
 }
@@ -447,7 +410,7 @@ int runGizmoShots(QMainWindow& w, const QString& dir) {
         sendMouse(v, QEvent::MouseMove, toPoint(p), Qt::NoButton, Qt::NoButton);
         pump(250);
         const QImage frame = v->grabFramebuffer();
-        missing += w.grab().save(dir + "/" + s.name + ".png") ? 0 : 1;
+        missing += windowShot(w).save(dir + "/" + s.name + ".png") ? 0 : 1;
         const Vector2 c = gv.project(v->gizmo().position());
         frame.copy(int(c.x) - 230, int(c.y) - 200, 460, 400).save(dir + "/" + s.name + "-close.png");
     }
@@ -464,7 +427,7 @@ int runGizmoShots(QMainWindow& w, const QString& dir) {
     }
     pump(250);
     const QImage frame = v->grabFramebuffer();
-    missing += w.grab().save(dir + "/gizmo-e-drag.png") ? 0 : 1;
+    missing += windowShot(w).save(dir + "/gizmo-e-drag.png") ? 0 : 1;
     frame.copy(int(centre.x) - 230, int(centre.y) - 200, 460, 400).save(dir + "/gizmo-e-drag-close.png");
     sendMouse(v, QEvent::MouseButtonRelease, toPoint(centre), Qt::LeftButton, Qt::NoButton);
     trigger(w, "toolMove");
@@ -490,6 +453,8 @@ int runBuilderSelfTest(QMainWindow& w, const QString& shotsDir) {
     run("mouse", [&] { testMouseDrag(c, w, *b, v), testCyclePicking(c, w, *b, v); });
     run("menu", [&] { testContextMenu(c, w, *b, v); });
     run("live", [&] { testLiveEdit(c, w, *b, v); });
+    run("components", [&] { c.failures += runComponentTests(w, *b, v, shotsDir); });
+    run("controls", [&] { c.failures += runControlTests(w, *b, v, shotsDir); });
     if (!shotsDir.isEmpty()) {
         QDir().mkpath(shotsDir);
         c.check(runGizmoShots(w, shotsDir) == 0, "screenshots of the gizmo");

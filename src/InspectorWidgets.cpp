@@ -5,6 +5,7 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QSignalBlocker>
+#include <QToolButton>
 
 QDoubleSpinBox* makeSpin(double min, double max, double step, int decimals, const QString& suffix) {
     auto* s = new QDoubleSpinBox;
@@ -80,4 +81,71 @@ void CollapsibleSection::setOpen(bool open) {
     const QString t = header_->text();
     const QString bare = t.startsWith(QChar(0x25B8)) || t.startsWith(QChar(0x25BE)) ? t.mid(2) : t;
     header_->setText(QString(open ? QChar(0x25BE) : QChar(0x25B8)) + " " + bare); // ▾ open, ▸ closed
+}
+
+ComponentCard::ComponentCard(const QString& title, const QIcon& icon, QWidget* parent) : QFrame(parent), title_(title) {
+    setObjectName("componentCard");
+    auto* col = new QVBoxLayout(this);
+    col->setContentsMargins(6, 4, 6, 6);
+    col->setSpacing(4);
+    auto* top = new QHBoxLayout;
+    top->setSpacing(2);
+    header_ = new QPushButton(icon, title);
+    header_->setIconSize(QSize(22, 22));
+    header_->setFlat(true);
+    header_->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    header_->setObjectName("sectionHeader");
+    connect(header_, &QPushButton::clicked, this, [this] { setOpen(!open_); });
+    remove_ = new QToolButton;
+    remove_->setText(QString(QChar(0x2715))); // ✕
+    remove_->setObjectName("cardRemove");
+    remove_->setToolTip("Убрать компонент «" + title + "»");
+    connect(remove_, &QToolButton::clicked, this, &ComponentCard::removeClicked);
+    top->addWidget(header_, 1);
+    top->addWidget(remove_);
+    col->addLayout(top);
+    bodyWidget_ = new QWidget;
+    bodyLayout_ = new QVBoxLayout(bodyWidget_);
+    bodyLayout_->setContentsMargins(8, 2, 2, 2);
+    bodyLayout_->setSpacing(6);
+    col->addWidget(bodyWidget_);
+    setOpen(true);
+}
+
+void ComponentCard::setOpen(bool open) {
+    open_ = open;
+    bodyWidget_->setVisible(open);
+    header_->setText(QString(open ? QChar(0x25BE) : QChar(0x25B8)) + " " + title_); // ▾ open, ▸ closed
+}
+
+InlineBanner::InlineBanner(QWidget* parent) : QFrame(parent) {
+    setObjectName("inlineBanner");
+    auto* row = new QHBoxLayout(this);
+    row->setContentsMargins(8, 6, 6, 6);
+    row->setSpacing(8);
+    text_ = new QLabel;
+    text_->setWordWrap(true);
+    button_ = new QPushButton;
+    button_->setObjectName("bannerButton");
+    connect(button_, &QPushButton::clicked, this, [this] {
+        if (fix_) fix_();
+    });
+    row->addWidget(text_, 1);
+    row->addWidget(button_);
+    setVisible(false);
+}
+
+void InlineBanner::showMessage(const QString& text, const QString& buttonText, std::function<void()> fix) {
+    text_->setText(text);
+    button_->setText(buttonText);
+    button_->setVisible(!buttonText.isEmpty() && fix);
+    fix_ = std::move(fix);
+    setVisible(true);
+}
+
+QString InlineBanner::message() const { return isHidden() ? QString() : text_->text(); }
+
+void InlineBanner::clearMessage() {
+    fix_ = nullptr;
+    setVisible(false);
 }

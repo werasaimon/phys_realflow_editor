@@ -5,46 +5,63 @@
 #include <QLineF>
 #include <QMouseEvent>
 
-void OrbitTool::press(Viewport&, QMouseEvent* e) { last_ = e->pos(); }
+static rf::Vector2 pixel(const QMouseEvent* e) { return rf::Vector2(float(e->position().x()), float(e->position().y())); }
 
-void OrbitTool::move(Viewport& v, QMouseEvent* e) {
-    QPoint d = e->pos() - last_;
+// ---------------------------------------------------------------------------
+// The camera
+// ---------------------------------------------------------------------------
+void CameraTool::press(Viewport& v, QMouseEvent* e) {
     last_ = e->pos();
-    const bool shift = e->modifiers() & Qt::ShiftModifier;
-    if ((e->buttons() & Qt::MiddleButton) && !shift) v.camera().rotate(float(d.x()), float(d.y()));
-    else if (e->buttons() & (Qt::RightButton | Qt::MiddleButton)) v.camera().pan(float(d.x()), float(d.y()));
-    else if (e->buttons() & Qt::LeftButton) v.camera().rotate(float(d.x()), float(d.y()));
+    move_ = v.cameraMoveFor(e->button(), e->modifiers());
+    if (move_ == CameraMove::Orbit) pivot_ = v.pointUnderCursor(e->position());
+    if (move_ == CameraMove::Dolly) pivot_ = v.camera().target();
+}
+
+void CameraTool::move(Viewport& v, QMouseEvent* e) {
+    const QPoint d = e->pos() - last_;
+    last_ = e->pos();
+    CameraMove m = move_;
+    if (v.flying() && (m == CameraMove::Orbit || m == CameraMove::Look)) m = CameraMove::Look; // W A S D held: look around
+    OrbitCamera& cam = v.camera();
+    switch (m) {
+    case CameraMove::Orbit: cam.orbitAround(pivot_, float(d.x()), float(d.y())); break;
+    case CameraMove::Look: cam.orbitAround(cam.eye(), float(d.x()), float(d.y())); break;
+    case CameraMove::Pan: cam.pan(float(d.x()), float(d.y())); break;
+    case CameraMove::Dolly: cam.zoomToward(pivot_, float(-d.y()) / 40.0f); break;
+    case CameraMove::None: return;
+    }
     v.update();
 }
 
+void CameraTool::release(Viewport&, QMouseEvent* e) {
+    if (e->buttons() == Qt::NoButton) move_ = CameraMove::None;
+}
+
+// ---------------------------------------------------------------------------
+// Play mode: grab a body
+// ---------------------------------------------------------------------------
 void GrabTool::press(Viewport& v, QMouseEvent* e) {
-    if (e->button() == Qt::LeftButton) {
+    if (e->button() == Qt::LeftButton && !(e->modifiers() & Qt::AltModifier)) {
         Ray ray = v.camera().screenRay(e->position(), v.size());
         int body;
         rf::Vector3 hit;
-        if (v.pickBody(ray, body, hit)) {
-            QVector3D f = v.camera().forward();
+        const bool onBody = v.pickBody(ray, body, hit);
+        if (onBody || v.pickParticle(ray, hit)) { // a rigid body, or a cloth / soft body / liquid particle
+            const QVector3D f = v.camera().forward();
             planeNormal_ = rf::Vector3(f.x(), f.y(), f.z());
             planePoint_ = hit;
             grabbing_ = true;
-            emit v.grabStarted(body, hit);
-            return;
-        }
-        if (v.pickParticle(ray, hit)) { // cloth, soft body or liquid particle
-            QVector3D f = v.camera().forward();
-            planeNormal_ = rf::Vector3(f.x(), f.y(), f.z());
-            planePoint_ = hit;
-            grabbing_ = true;
-            emit v.particleGrabStarted(hit);
+            if (onBody) emit v.grabStarted(body, hit);
+            else emit v.particleGrabStarted(hit);
             return;
         }
     }
-    fallback_.press(v, e);
+    camera_.press(v, e);
 }
 
 void GrabTool::move(Viewport& v, QMouseEvent* e) {
     if (!grabbing_) {
-        fallback_.move(v, e);
+        camera_.move(v, e);
         return;
     }
     Ray ray = v.camera().screenRay(e->position(), v.size());
@@ -60,65 +77,79 @@ void GrabTool::release(Viewport& v, QMouseEvent* e) {
         grabbing_ = false;
         emit v.grabReleased();
     }
+    camera_.release(v, e);
 }
 
-static rf::Vector2 pixel(const QMouseEvent* e) { return rf::Vector2(float(e->position().x()), float(e->position().y())); }
-
+// ---------------------------------------------------------------------------
+// Edit mode
+// ---------------------------------------------------------------------------
 void EditTool::press(Viewport& v, QMouseEvent* e) {
-    if (v.gizmo().modal()) { // a keyboard transform: left confirms, right cancels
+    if (pressTransform(v, e)) return;
+    const CameraMove cam = v.cameraMoveFor(e->button(), e->modifiers());
+    if (e->button() == Qt::RightButton && !(e->modifiers() & Qt::AltModifier)) { // a click (no drag) opens the menu
+        rightClickPending_ = true;
+        rightPressPos_ = e->position();
+    }
+    if (cam != CameraMove::None || e->button() != Qt::LeftButton) {
+        camera_.press(v, e);
+        return;
+    }
+    pressLeft(v, e);
+}
+
+// A keyboard transform: left confirms, right cancels. A handle drag: the right button puts it back.
+bool EditTool::pressTransform(Viewport& v, QMouseEvent* e) {
+    if (v.gizmo().modal()) {
         if (e->button() == Qt::LeftButton) v.finishModal();
         else if (e->button() == Qt::RightButton) v.cancelModal();
-        return;
+        return true;
     }
-    if (v.gizmo().dragging()) { // the right button during a handle drag puts the object back
+    if (v.gizmo().dragging()) {
         if (e->button() == Qt::RightButton) v.cancelGizmoDrag();
-        return;
+        return true;
     }
-    if (e->button() != Qt::LeftButton) {
-        if (e->button() == Qt::RightButton) { // a right click (no drag) opens the context menu
-            rightClickPending_ = true;
-            rightPressPos_ = e->position();
-        }
-        orbit_.press(v, e);
-        return;
-    }
-    const bool alt = e->modifiers() & Qt::AltModifier; // Alt+click: the next object on the ray, never a handle
-    if (!alt && v.gizmoShown()) {
+    return false;
+}
+
+void EditTool::pressLeft(Viewport& v, QMouseEvent* e) {
+    pressPos_ = boxEnd_ = e->position();
+    if (v.gizmoShown()) {
         pending_ = v.gizmo().hitTest(v.gizmoView(), pixel(e));
-        if (pending_ != GizmoHandle::None) { // the drag starts once the mouse has moved 3 px
-            pressPos_ = e->position();
-            return;
-        }
+        if (pending_ != GizmoHandle::None) return; // the drag starts once the mouse has moved 3 px
     }
-    if ((e->modifiers() & Qt::ShiftModifier) && startFloorDrag(v, e)) return;
-    pressPos_ = e->position();
+    pressedEntity_ = v.pickEntity(v.camera().screenRay(e->position(), v.size()));
     clickPending_ = true;
-    orbit_.press(v, e);
 }
 
-// Shift+drag: the object under the cursor is selected and slides on the horizontal plane through
-// the point that was hit, which stays under the cursor.
-bool EditTool::startFloorDrag(Viewport& v, QMouseEvent* e) {
+void EditTool::startFloorDrag(Viewport& v, QMouseEvent* e) {
+    const rf::Vector2 press(float(pressPos_.x()), float(pressPos_.y()));
     rf::Vector3 hit;
-    const uint32_t id = v.pickEntity(v.camera().screenRay(e->position(), v.size()), &hit);
-    if (!id) return false;
-    emit v.entityClicked(id); // the builder selects it and puts the gizmo on it
-    v.gizmo().beginFloorDrag(v.gizmoView(), pixel(e), hit);
+    if (!v.pickEntity(v.camera().screenRay(pressPos_, v.size()), &hit)) return;
+    emit v.entityClicked(pressedEntity_); // the builder selects it and puts the gizmo on it
+    v.gizmo().beginFloorDrag(v.gizmoView(), press, hit);
     floorDrag_ = true;
-    virtualMouse_ = lastMouse_ = pixel(e);
+    virtualMouse_ = lastMouse_ = press;
     emit v.gizmoStarted();
-    return true;
+    moveGizmo(v, e);
 }
 
-void EditTool::move(Viewport& v, QMouseEvent* e) {
+// The left button went 4 px from where it was pressed: on an object with Shift a floor slide, from
+// empty space the selection box.
+void EditTool::startLeftDrag(Viewport& v, QMouseEvent* e) {
+    clickPending_ = false;
+    if (pressedEntity_ && (e->modifiers() & Qt::ShiftModifier)) startFloorDrag(v, e);
+    else if (!pressedEntity_) box_ = true;
+}
+
+bool EditTool::moveGizmo(Viewport& v, QMouseEvent* e) {
     const bool snap = e->modifiers() & Qt::ControlModifier;
     if (v.gizmo().modal()) {
         emit v.gizmoMoved(v.gizmo().drag(v.gizmoView(), pixel(e), snap));
         v.update();
-        return;
+        return true;
     }
     if (pending_ != GizmoHandle::None) { // a pressed handle: a click does not nudge the object
-        if (QLineF(e->position(), pressPos_).length() < 3) return;
+        if (QLineF(e->position(), pressPos_).length() < 3) return true;
         const rf::Vector2 press(float(pressPos_.x()), float(pressPos_.y()));
         v.gizmo().begin(pending_, v.gizmoView(), press);
         pending_ = GizmoHandle::None;
@@ -126,18 +157,29 @@ void EditTool::move(Viewport& v, QMouseEvent* e) {
         virtualMouse_ = lastMouse_ = press;
         emit v.gizmoStarted();
     }
-    if (v.gizmo().dragging()) {
-        const float speed = (e->modifiers() & Qt::ShiftModifier) && !floorDrag_ ? 0.1f : 1.0f;
-        virtualMouse_ += (pixel(e) - lastMouse_) * speed;
-        lastMouse_ = pixel(e);
-        emit v.gizmoMoved(v.gizmo().drag(v.gizmoView(), virtualMouse_, snap));
+    if (!v.gizmo().dragging()) return false;
+    const float speed = (e->modifiers() & Qt::ShiftModifier) && !floorDrag_ ? 0.1f : 1.0f;
+    virtualMouse_ += (pixel(e) - lastMouse_) * speed;
+    lastMouse_ = pixel(e);
+    emit v.gizmoMoved(v.gizmo().drag(v.gizmoView(), virtualMouse_, snap));
+    v.update();
+    return true;
+}
+
+void EditTool::move(Viewport& v, QMouseEvent* e) {
+    if (moveGizmo(v, e)) return;
+    if (rightClickPending_ && (QLineF(e->position(), rightPressPos_).length() > 4 || v.flying())) rightClickPending_ = false;
+    if (box_) {
+        boxEnd_ = e->position();
         v.update();
         return;
     }
+    if (clickPending_ && (e->buttons() & Qt::LeftButton)) {
+        if (QLineF(e->position(), pressPos_).length() > 4) startLeftDrag(v, e);
+        return;
+    }
     if (e->buttons() != Qt::NoButton) {
-        if (clickPending_ && QLineF(e->position(), pressPos_).length() > 4) clickPending_ = false; // a drag, not a click
-        if (rightClickPending_ && QLineF(e->position(), rightPressPos_).length() > 4) rightClickPending_ = false;
-        orbit_.move(v, e);
+        camera_.move(v, e);
         return;
     }
     hover(v, e);
@@ -154,45 +196,58 @@ void EditTool::hover(Viewport& v, QMouseEvent* e) {
 }
 
 void EditTool::release(Viewport& v, QMouseEvent* e) {
+    camera_.release(v, e);
     if (e->button() == Qt::RightButton) {
-        if (rightClickPending_) emit v.editContextMenu(e->position());
+        if (rightClickPending_ && !v.flewThisPress()) emit v.editContextMenu(e->position());
         rightClickPending_ = false;
         return;
     }
+    if (e->button() != Qt::LeftButton) return;
     if (pending_ != GizmoHandle::None) { // pressed and released on a handle without moving
         pending_ = GizmoHandle::None;
         return;
     }
     if (v.gizmo().dragging() && !v.gizmo().modal()) {
-        if (e->button() != Qt::LeftButton) return;
         v.gizmo().end();
         floorDrag_ = false;
         emit v.gizmoFinished();
         v.update();
         return;
     }
-    if (clickPending_ && e->button() == Qt::LeftButton) v.clickSelect(e->position(), e->modifiers() & Qt::AltModifier);
+    if (box_) {
+        box_ = false;
+        emit v.boxSelected(boxRect(), e->modifiers());
+        v.update();
+        return;
+    }
+    const bool toggle = e->modifiers() & (Qt::ShiftModifier | Qt::ControlModifier);
+    if (clickPending_ && toggle && pressedEntity_) emit v.entityToggled(pressedEntity_);
+    else if (clickPending_ && !toggle) v.clickSelect(e->position(), false);
     clickPending_ = false;
 }
 
+// ---------------------------------------------------------------------------
+// Play mode in a gas: stir it
+// ---------------------------------------------------------------------------
 void DisturbTool::press(Viewport& v, QMouseEvent* e) {
-    if (e->button() != Qt::LeftButton) {
-        fallback_.press(v, e);
+    if (e->button() != Qt::LeftButton || (e->modifiers() & Qt::AltModifier)) {
+        camera_.press(v, e);
         return;
     }
     stroke(v, e, true);
 }
 
 void DisturbTool::move(Viewport& v, QMouseEvent* e) {
-    if (!(e->buttons() & Qt::LeftButton)) {
-        fallback_.move(v, e);
+    if (!(e->buttons() & Qt::LeftButton) || !active_) {
+        camera_.move(v, e);
         return;
     }
-    if (active_) stroke(v, e, false);
+    stroke(v, e, false);
 }
 
-void DisturbTool::release(Viewport&, QMouseEvent* e) {
+void DisturbTool::release(Viewport& v, QMouseEvent* e) {
     if (e->button() == Qt::LeftButton) active_ = false;
+    camera_.release(v, e);
 }
 
 void DisturbTool::stroke(Viewport& v, QMouseEvent* e, bool first) {

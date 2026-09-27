@@ -9,8 +9,10 @@
 #include <QPixmap>
 #include <QString>
 
-// The roles as the editor shows them: what a shape is made of, and what it also does.
-enum class RoleIcon { Rigid, Soft, Liquid, Cloth, Magnet, Smoke, Flame, Heat, Count };
+// The components as the editor shows them: what a shape is made of (the first four, one at a
+// time), what it also does, and its collider (what it collides with - a component of its own, as
+// in Unity: alone it is a fixed obstacle, with Rigid a moving body).
+enum class RoleIcon { Rigid, Soft, Liquid, Cloth, Magnet, Smoke, Flame, Heat, Collider, Count };
 
 // Buttons of the simulation: run, pause, stop, one step, back to the start, undo, redo, eye, lock,
 // and the tools of the edit mode: select, move, rotate, scale.
@@ -23,6 +25,8 @@ QIcon shapeIcon(rf::ShapeKind shape, int size = 48);
 QIcon roleIcon(RoleIcon role, int size = 40);
 QIcon controlIcon(ControlIcon control, int size = 32);
 QPixmap rolePixmap(RoleIcon role, int size); // for small chips next to a name
+// The kinds of collider as small wireframe glyphs: Авто, Коробка, Сфера, Капсула, Оболочка, Точно.
+QIcon colliderIcon(rf::ColliderKind kind, int size = 28);
 
 // Writes every icon as a PNG into `dir` (for the README and a quick look); returns the file count.
 int dumpIcons(const QString& dir, int size = 96);

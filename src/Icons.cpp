@@ -436,6 +436,100 @@ void drawControl(QPainter& p, ControlIcon c) {
     }
 }
 
+
+// ---------------------------------------------------------------------------
+// Colliders: thin pale-green wireframes, the colour the viewport draws them in
+// ---------------------------------------------------------------------------
+const QColor kGuide(124, 255, 154);
+
+QPen guidePen(qreal width = 3.2) { return QPen(kGuide, width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin); }
+
+// Every stroke twice: a dark one under a green one, so the glyph reads on light and dark buttons.
+void guideStroke(QPainter& p, const std::function<void()>& draw) {
+    p.setBrush(Qt::NoBrush);
+    p.setPen(QPen(QColor(0, 0, 0, 110), 5.6, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    draw();
+    p.setPen(guidePen());
+    draw();
+}
+
+void drawWireCube(QPainter& p) {
+    guideStroke(p, [&p] {
+        const QPointF a[] = {{22, 34}, {58, 34}, {58, 76}, {22, 76}};
+        const QPointF b[] = {{42, 20}, {78, 20}, {78, 62}, {42, 62}};
+        p.drawPolygon(a, 4);
+        p.drawPolygon(b, 4);
+        for (int k = 0; k < 4; ++k) p.drawLine(a[k], b[k]);
+    });
+}
+
+void drawWireSphere(QPainter& p) {
+    guideStroke(p, [&p] {
+        p.drawEllipse(QPointF(50, 50), 34, 34);
+        p.drawEllipse(QPointF(50, 50), 34, 12);
+        p.drawEllipse(QPointF(50, 50), 12, 34);
+    });
+}
+
+void drawWireCapsule(QPainter& p) {
+    guideStroke(p, [&p] {
+        p.drawRoundedRect(QRectF(30, 10, 40, 80), 20, 20);
+        p.drawEllipse(QPointF(50, 30), 20, 6);
+        p.drawEllipse(QPointF(50, 70), 20, 6);
+    });
+}
+
+void drawWireHull(QPainter& p) {
+    guideStroke(p, [&p] {
+        const QPointF outer[] = {{50, 10}, {84, 32}, {78, 72}, {46, 90}, {16, 66}, {20, 28}};
+        p.drawPolygon(outer, 6);
+        p.drawLine(QPointF(50, 10), QPointF(52, 52));
+        p.drawLine(QPointF(52, 52), QPointF(78, 72));
+        p.drawLine(QPointF(52, 52), QPointF(16, 66));
+    });
+}
+
+void drawWireParts(QPainter& p) {
+    guideStroke(p, [&p] {
+        p.drawRect(QRectF(14, 46, 34, 36));
+        const QPointF tri[] = {{56, 82}, {88, 82}, {72, 50}};
+        p.drawPolygon(tri, 3);
+        p.drawEllipse(QPointF(40, 26), 16, 14);
+    });
+}
+
+// Авто: the collider follows the shape - a wire cube with a small spark in its corner.
+void drawWireAuto(QPainter& p) {
+    drawWireCube(p);
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor(255, 214, 90));
+    const QPointF star[] = {{84, 64}, {88, 76}, {98, 80}, {88, 84}, {84, 96}, {80, 84}, {70, 80}, {80, 76}};
+    p.drawPolygon(star, 8);
+}
+
+Draw colliderDraw(rf::ColliderKind k) {
+    switch (k) {
+    case rf::ColliderKind::Auto: return drawWireAuto;
+    case rf::ColliderKind::Box: return drawWireCube;
+    case rf::ColliderKind::Sphere: return drawWireSphere;
+    case rf::ColliderKind::Capsule: return drawWireCapsule;
+    case rf::ColliderKind::ConvexHull: return drawWireHull;
+    case rf::ColliderKind::Decomposition: return drawWireParts;
+    }
+    return [](QPainter&) {};
+}
+
+// The collider as a component: a grey block inside a green wire cage.
+void drawColliderRole(QPainter& p) {
+    p.save();
+    p.translate(50, 50);
+    p.scale(0.55, 0.55);
+    p.translate(-50, -50);
+    drawRigidBlock(p);
+    p.restore();
+    guideStroke(p, [&p] { p.drawRoundedRect(QRectF(12, 12, 76, 76), 10, 10); });
+}
+
 Draw roleDraw(RoleIcon r) {
     switch (r) {
     case RoleIcon::Rigid: return drawRigidBlock;
@@ -446,6 +540,7 @@ Draw roleDraw(RoleIcon r) {
     case RoleIcon::Smoke: return drawSmoke;
     case RoleIcon::Flame: return drawFlame;
     case RoleIcon::Heat: return drawThermometer;
+    case RoleIcon::Collider: return drawColliderRole;
     case RoleIcon::Count: break;
     }
     return [](QPainter&) {};
@@ -472,6 +567,7 @@ QIcon controlIcon(ControlIcon control, int size) {
     return makeIcon(size, [control](QPainter& p) { drawControl(p, control); });
 }
 QPixmap rolePixmap(RoleIcon role, int size) { return render(size, 2.0, roleDraw(role)); }
+QIcon colliderIcon(rf::ColliderKind kind, int size) { return makeIcon(size, colliderDraw(kind)); }
 
 int dumpIcons(const QString& dir, int size) {
     QDir().mkpath(dir);
@@ -479,8 +575,10 @@ int dumpIcons(const QString& dir, int size) {
     auto save = [&](const QString& name, const Draw& draw) { n += render(size, 1.0, draw).save(dir + "/" + name + ".png") ? 1 : 0; };
     const char* shapes[] = {"shape-cube", "shape-sphere", "shape-cylinder", "shape-cone", "shape-plane", "shape-model"};
     for (int k = 0; k < 6; ++k) save(shapes[k], shapeDraw(rf::ShapeKind(k)));
-    const char* roles[] = {"role-rigid", "role-soft", "role-liquid", "role-cloth", "role-magnet", "role-smoke", "role-flame", "role-heat"};
+    const char* roles[] = {"role-rigid", "role-soft", "role-liquid", "role-cloth", "role-magnet", "role-smoke", "role-flame", "role-heat", "role-collider"};
     for (int k = 0; k < int(RoleIcon::Count); ++k) save(roles[k], roleDraw(RoleIcon(k)));
+    const char* colliders[] = {"collider-auto", "collider-box", "collider-sphere", "collider-capsule", "collider-hull", "collider-parts"};
+    for (int k = 0; k < 6; ++k) save(colliders[k], colliderDraw(rf::ColliderKind(k)));
     const char* controls[] = {"play", "pause", "stop", "step", "reset", "undo", "redo", "visible", "hidden", "locked", "unlocked",
                               "tool-select", "tool-move", "tool-rotate", "tool-scale"};
     for (int k = 0; k < int(ControlIcon::Count); ++k) {

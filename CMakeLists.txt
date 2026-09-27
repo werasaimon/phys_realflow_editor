@@ -26,8 +26,11 @@ qt_standard_project_setup()
 
 qt_add_executable(realflow WIN32
   src/main.cpp
-  src/MainWindow.h      src/MainWindow.cpp
-  src/Viewport.h        src/Viewport.cpp
+  src/MainWindow.h      src/MainWindow.cpp src/MainWindowStart.cpp src/MainWindowControls.cpp
+  src/FirstStartHint.h  src/FirstStartHint.cpp
+  src/ExamplesGallery.h src/ExamplesGallery.cpp
+  src/Viewport.h        src/Viewport.cpp src/ViewportInput.cpp
+  src/NavCube.h         src/NavCube.cpp
   src/Shaders.h
   src/VolumeRenderer.cpp
   src/SimController.h   src/SimController.cpp
@@ -37,13 +40,16 @@ qt_add_executable(realflow WIN32
   src/FluidSurfaceRenderer.h src/FluidSurfaceRenderer.cpp
   src/PlotPanel.h       src/PlotPanel.cpp
   src/Gizmo.h           src/Gizmo.cpp
+  src/ControlScheme.h   src/ControlScheme.cpp
   src/EditView.h        src/EditView.cpp
-  src/SceneBuilder.h    src/SceneBuilder.cpp  src/SceneBuilderPanels.cpp
+  src/SceneBuilder.h    src/SceneBuilder.cpp  src/SceneBuilderPanels.cpp src/SceneBuilderColliders.cpp src/SceneBuilderSelection.cpp
+  src/ColliderGuides.h  src/ColliderGuides.cpp
+  src/ColliderPanel.h   src/ColliderPanel.cpp
   src/ObjectInspector.h src/ObjectInspector.cpp
   src/InspectorWidgets.h src/InspectorWidgets.cpp
   src/RoleBar.h         src/RoleBar.cpp
   src/Icons.h           src/Icons.cpp
-  src/SelfTest.h        src/SelfTest.cpp
+  src/SelfTest.h        src/SelfTest.cpp  src/SelfTestSupport.h src/SelfTestComponents.cpp src/SelfTestControls.cpp
 )
 target_link_libraries(realflow PRIVATE rfcore rfsamples
   Qt6::Core Qt6::Gui Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets Qt6::Charts)

@@ -26,6 +26,7 @@
 #include <QMenu>
 #include <QMenuBar>
 #include <QMessageBox>
+#include <QPainter>
 #include <QPointer>
 #include <QProcess>
 #include <QPushButton>
@@ -33,6 +34,7 @@
 #include <QSplitter>
 #include <QStatusBar>
 #include <QStyle>
+#include <QTabWidget>
 #include <QTableWidget>
 #include <QTimer>
 #include <QToolBar>
@@ -59,8 +61,40 @@ MainWindow::MainWindow() {
     view_ = new Viewport(this);
     view_->setBrushRadius(brush_.radius);
     setCentralWidget(view_);
+    connectViewport();
+    buildActions();
+    buildParameterDock();
+    buildVisualDock();
+    buildResultsDock();
+    // The right column (scene list, inspector) runs the full height, like the panels of a 3D package.
+    setCorner(Qt::BottomRightCorner, Qt::RightDockWidgetArea);
+    setCorner(Qt::TopRightCorner, Qt::RightDockWidgetArea);
+    buildSceneBuilderDock();
+    connectSceneBuilder();
+    buildLayoutActions();
+    buildMainToolbar();
+    buildToolShelf();
+    buildSceneMenu();
+    buildEditMenu();
+    buildControlsMenu();
+    connectViewportControls();
+    setExpertMode(false);   // a beginner's screen: the builder and a big 3D view
+    setGraphsVisible(false);
+
+    status_ = new QLabel;
+    statusBar()->addPermanentWidget(status_);
+    onModeChanged();
+
+    timer_ = new QTimer(this);
+    connect(timer_, &QTimer::timeout, this, &MainWindow::poll);
+    timer_->start(15);
+    poll();
+}
+
+// What the 3D view asks of the simulation: a stir of the gas, the mouse joint (pick with the cursor
+// ray, drag the target, release), and a restart without the GPU when OpenGL 3 is missing.
+void MainWindow::connectViewport() {
     connect(view_, &Viewport::disturbanceRequested, this, &MainWindow::onDisturbance);
-    // Mouse joint: pick with the cursor ray, drag the target, release.
     connect(view_, &Viewport::openGLUnsupported, this, [this](QString renderer) {
         auto answer = QMessageBox::question(
             this, "OpenGL",
@@ -91,31 +125,6 @@ MainWindow::MainWindow() {
             s.particles.releaseGrab();
         });
     });
-
-    buildActions();
-    buildParameterDock();
-    buildVisualDock();
-    buildResultsDock();
-    // The right column (scene list, inspector) runs the full height, like the panels of a 3D package.
-    setCorner(Qt::BottomRightCorner, Qt::RightDockWidgetArea);
-    setCorner(Qt::TopRightCorner, Qt::RightDockWidgetArea);
-    buildSceneBuilderDock();
-    connectSceneBuilder();
-    buildLayoutActions();
-    buildMainToolbar();
-    buildToolShelf();
-    buildSceneMenu();
-    setExpertMode(false);   // a beginner's screen: the builder and a big 3D view
-    setGraphsVisible(false);
-
-    status_ = new QLabel;
-    statusBar()->addPermanentWidget(status_, 1);
-    onModeChanged();
-
-    timer_ = new QTimer(this);
-    connect(timer_, &QTimer::timeout, this, &MainWindow::poll);
-    timer_->start(15);
-    poll();
 }
 
 MainWindow::~MainWindow() {
@@ -132,6 +141,7 @@ void MainWindow::buildActions() {
     playAct_->setShortcut(Qt::Key_Space);
     playAct_->setToolTip("Пуск (пробел): физика оживает — сцена строится из того, что нарисовано");
     connect(playAct_, &QAction::triggered, this, &MainWindow::togglePlay);
+    playAct_->setObjectName("actionPlay");
     pauseAct_ = new QAction(controlIcon(ControlIcon::Pause, 48), "Пауза", this);
     pauseAct_->setToolTip("Пауза (пробел)");
     connect(pauseAct_, &QAction::triggered, this, [this] { builder_->pause(); });
@@ -141,8 +151,8 @@ void MainWindow::buildActions() {
     connect(stopAct_, &QAction::triggered, this, [this] { builder_->stop(); });
 
     stepAct_ = new QAction(controlIcon(ControlIcon::Step, 48), "Шаг", this);
-    stepAct_->setShortcut(Qt::Key_S);
-    stepAct_->setToolTip("Один кадр (S)");
+    stepAct_->setShortcut(Qt::Key_Period);
+    stepAct_->setToolTip("Один кадр (.)");
     connect(stepAct_, &QAction::triggered, this, [this] { builder_->step(); });
 
     auto* importAct = new QAction(style()->standardIcon(QStyle::SP_DialogOpenButton), "Импорт модели…", this);
@@ -178,7 +188,6 @@ void MainWindow::buildActions() {
 
     auto* viewMenu = menuBar()->addMenu("&Вид");
     viewMenu->setObjectName("viewMenu");
-    viewMenu->addAction("Показать всю сцену", QKeySequence(Qt::Key_F), view_, &Viewport::frameScene);
     viewMenu->addSeparator();
 
     auto* help = menuBar()->addMenu("&Справка");
@@ -221,13 +230,20 @@ void MainWindow::buildLayoutActions() {
     graphsAct_->setShortcut(QKeySequence("Ctrl+G"));
     graphsAct_->setToolTip("Показания и графики внизу (Ctrl+G); без них главные числа — в строке состояния");
     connect(graphsAct_, &QAction::toggled, this, &MainWindow::setGraphsVisible);
+    collidersAct_ = new QAction(roleIcon(RoleIcon::Collider, 20), "Коллайдеры", this);
+    collidersAct_->setCheckable(true);
+    collidersAct_->setToolTip("Показать, чем сталкивается каждый объект: тонкий зелёный каркас. "
+                              "Выбранный объект показывает свой всегда");
+    connect(collidersAct_, &QAction::toggled, builder_, &SceneBuilder::setShowAllColliders);
     QMenu* viewMenu = menuBar()->findChild<QMenu*>("viewMenu");
     viewMenu->addSeparator();
+    viewMenu->addAction(collidersAct_);
     viewMenu->addAction(graphsAct_);
     viewMenu->addAction(expertAct_);
 }
 
 void MainWindow::setExpertMode(bool on) {
+    view_->setShowStats(on); // the time step and frame rate: numbers for the curious
     for (const char* name : {"paramsDock", "visDock"})
         if (auto* dock = findChild<QDockWidget*>(name)) dock->setVisible(on);
     expertAct_->setChecked(on);
@@ -285,7 +301,7 @@ QMenu* MainWindow::buildEditContextMenu() {
         QAction* a = menu->addAction(s.text);
         a->setCheckable(true);
         a->setChecked(localAct_->isChecked() == s.local);
-        a->setShortcut(Qt::Key_X);
+        a->setShortcut(Qt::Key_L);
         space->addAction(a);
         const bool local = s.local;
         connect(a, &QAction::triggered, this, [this, local] { localAct_->setChecked(local); });
@@ -302,9 +318,9 @@ void MainWindow::addObjectActions(QMenu* menu) {
     if (!e) return;
     menu->addSection(QString::fromStdString(e->name));
     menu->addAction("Показать", QKeySequence(Qt::Key_F), this, [this] { builder_->frameSelected(); });
-    menu->addAction("Дублировать", this, [this] { builder_->duplicateSelected(); });
-    menu->addAction("Удалить", QKeySequence::Delete, this, [this] { builder_->removeSelected(); });
-    menu->addAction(e->visible ? "Скрыть" : "Показать объект", this, [this, id] { builder_->toggleVisible(id); });
+    menu->addAction("Дублировать", duplicateAct_->shortcut(), this, [this] { builder_->duplicateSelected(); });
+    menu->addAction("Удалить", deleteAct_->shortcut(), this, [this] { builder_->removeSelected(); });
+    menu->addAction(e->visible ? "Скрыть" : "Показать объект", QKeySequence(Qt::Key_H), this, [this, id] { builder_->toggleVisible(id); });
     menu->addAction(e->locked ? "Разблокировать" : "Заблокировать", this, [this, id] { builder_->toggleLocked(id); });
     QMenu* roles = menu->addMenu(roleIcon(RoleIcon::Rigid, 20), "Роль");
     for (int k = 0; k < int(RoleIcon::Count); ++k) {
@@ -354,8 +370,8 @@ void MainWindow::buildToolShelf() {
     localAct_ = tb->addAction("Мир");
     localAct_->setObjectName("toolLocal");
     localAct_->setCheckable(true);
-    localAct_->setShortcut(Qt::Key_X);
-    localAct_->setToolTip("Оси гизмо (X): «Мир» — оси сцены, «Свои» — оси самого объекта");
+    localAct_->setShortcut(Qt::Key_L);
+    localAct_->setToolTip("Оси гизмо (L): «Мир» — оси сцены, «Свои» — оси самого объекта");
     connect(localAct_, &QAction::toggled, this, [this](bool on) {
         view_->gizmo().setLocal(on);
         localAct_->setText(on ? "Свои" : "Мир");
@@ -819,33 +835,36 @@ void MainWindow::buildParameterDock() {
 // ---------------------------------------------------------------------------
 // Scene builder ("Конструктор"): shapes with roles, saved as *.rfscene
 // ---------------------------------------------------------------------------
-// Two panels on the right, like the outliner and the properties of a 3D package: the scene list
-// on top, the inspector of the selected thing below (the visualisation settings share its place
-// as a tab).
+// One panel on the right with two tabs, like Unity's Hierarchy and Inspector: "Сцена" (the list of
+// objects and the world) and "Объект" (the selected object: its card, its geometry, its components).
+// Selecting an object turns to "Объект". The visualisation settings share the place as a tab.
+static QScrollArea* scrolled(QWidget* content) {
+    auto* scroll = new QScrollArea;
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    scroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff); // the fields shrink, the panel never scrolls sideways
+    scroll->setWidget(content);
+    scroll->setMinimumWidth(340);
+    return scroll;
+}
+
 void MainWindow::buildSceneBuilderDock() {
     builder_ = new SceneBuilder(ctrl_.get(), this);
-    auto makeDock = [this](const QString& title, const char* name, QWidget* content) {
-        auto* dock = new QDockWidget(title, this);
-        dock->setObjectName(name);
-        auto* scroll = new QScrollArea;
-        scroll->setWidgetResizable(true);
-        scroll->setFrameShape(QFrame::NoFrame);
-        scroll->setWidget(content);
-        scroll->setMinimumWidth(330);
-        dock->setWidget(scroll);
-        addDockWidget(Qt::RightDockWidgetArea, dock);
-        menuBar()->findChild<QMenu*>("viewMenu")->addAction(dock->toggleViewAction());
-        return dock;
-    };
-    QDockWidget* list = makeDock("Сцена", "sceneListDock", builder_->sceneListPanel());
-    QDockWidget* inspector = makeDock("Инспектор", "inspectorDock", builder_->inspectorPanel());
-    splitDockWidget(list, inspector, Qt::Vertical);
+    inspectorTabs_ = new QTabWidget;
+    inspectorTabs_->setObjectName("inspectorTabs");
+    inspectorTabs_->addTab(scrolled(builder_->sceneListPanel()), "Сцена");
+    inspectorTabs_->addTab(scrolled(builder_->inspectorPanel()), "Объект");
+    inspectorTabs_->setTabToolTip(0, "Все объекты сцены и мир: воздух, гравитация");
+    inspectorTabs_->setTabToolTip(1, "Выбранный объект: где стоит, как выглядит и что умеет");
+    auto* dock = new QDockWidget("Инспектор", this);
+    dock->setObjectName("inspectorDock");
+    dock->setWidget(inspectorTabs_);
+    addDockWidget(Qt::RightDockWidgetArea, dock);
+    menuBar()->findChild<QMenu*>("viewMenu")->addAction(dock->toggleViewAction());
     if (auto* vis = findChild<QDockWidget*>("visDock")) {
-        tabifyDockWidget(inspector, vis);
-        inspector->raise();
+        tabifyDockWidget(dock, vis);
+        dock->raise();
     }
-    // The sizes apply once the window has its size: after the first layout.
-    QTimer::singleShot(0, this, [this, list, inspector] { resizeDocks({list, inspector}, {280, 560}, Qt::Vertical); });
 }
 
 void MainWindow::connectSceneBuilder() {
@@ -882,13 +901,17 @@ void MainWindow::connectSceneBuilder() {
             hits.push_back({builder_->entityOfBody(body), rf::length(hit - ray.origin), hit, ""});
         return hits;
     });
-    addAction(builder_->deselectAction()); // Esc works wherever the focus is in the window
+    connect(builder_, &SceneBuilder::selectionChanged, this, [this](uint32_t id) {
+        if (id != 0) inspectorTabs_->setCurrentIndex(1); // selecting shows the object
+    });
+    connect(builder_, &SceneBuilder::colliderGuides, view_, &Viewport::setColliderGuides);
 }
 
 // The big bar on top: what you can create, then run / step / back to the start, then undo / redo,
 // and the ready-made scenes at the right end.
 void MainWindow::buildMainToolbar() {
     auto* tb = new QToolBar("Создать", this);
+    createBar_ = tb;
     tb->setObjectName("createBar");
     tb->setMovable(false);
     tb->setIconSize(QSize(48, 48));
@@ -913,35 +936,15 @@ void MainWindow::buildMainToolbar() {
         tb->addWidget(b);
     };
     auto* samplesButton = new QToolButton;
-    samplesButton->setText("Примеры ▾");
-    samplesButton->setToolTip("Готовые сцены SDK: вода, огонь, плазма, токамак, уроки…");
-    samplesButton->setMenu(samplesMenu_);
-    samplesButton->setPopupMode(QToolButton::InstantPopup);
+    samplesButton->setText("Примеры");
+    samplesButton->setToolTip("Все готовые сцены картинками: вода, огонь, плазма, токамак, уроки… Нажмите — откроется");
+    connect(samplesButton, &QToolButton::clicked, this, &MainWindow::openGallery);
     compact(samplesButton);
-    for (QAction* a : {graphsAct_, expertAct_}) {
+    for (QAction* a : {collidersAct_, graphsAct_, expertAct_}) {
         auto* b = new QToolButton;
         b->setDefaultAction(a);
         compact(b);
     }
-}
-
-// The builder's first scene: the file given on the command line, else a floor. It asks to run.
-void MainWindow::startBuilder() {
-    QString error;
-    if (!startScene_.isEmpty() && !builder_->openFile(startScene_, error)) QMessageBox::warning(this, "Открыть сцену", error);
-    if (startScene_.isEmpty() || !error.isEmpty()) builder_->newScene();
-}
-
-// Where "Открыть…" starts: the editor's examples/ (next to the program when installed, else the
-// source tree the build came from).
-static QString examplesDir() {
-    const QString nextToExe = QCoreApplication::applicationDirPath() + "/examples";
-    if (QDir(nextToExe).exists()) return nextToExe;
-#ifdef RF_EDITOR_EXAMPLES
-    return QStringLiteral(RF_EDITOR_EXAMPLES);
-#else
-    return QDir::currentPath();
-#endif
 }
 
 void MainWindow::buildSceneMenu() {
@@ -960,6 +963,7 @@ void MainWindow::buildSceneMenu() {
         if (!builder_->saveFile(path, error)) QMessageBox::warning(this, "Сохранить сцену", error);
     });
     menu->addSeparator();
+    menu->addAction("Примеры…", this, &MainWindow::openGallery);
     menu->addMenu(samplesMenu_);
     menu->addSeparator();
     // TODO: the node view - entities and roles as boxes wired together (the next step of the builder).
@@ -1194,7 +1198,7 @@ void MainWindow::updateInfo(const Snap& s) {
     QString readings;
     int shown = 0;
     for (const auto& [name, value] : s.info) {
-        if (graphsAct_->isChecked() || shown == 3 || name == "Время") continue;
+        if (!expertAct_->isChecked() || graphsAct_->isChecked() || shown == 3 || name == "Время") continue;
         readings += QString("  ·  %1 %2").arg(QString::fromStdString(name), QString::fromStdString(value));
         ++shown;
     }
@@ -1257,11 +1261,20 @@ void MainWindow::onSnapshot(const std::shared_ptr<const Snap>& s) {
     if (auto_.active && wanted && int(s->frame) >= auto_.frames && ++auto_.settle == 1) {
         ctrl_->setRunning(false);
         QTimer::singleShot(300, this, [this] {
-            if (!auto_.shot.isEmpty()) (auto_.wholeWindow ? grab().toImage() : view_->grabFramebuffer()).save(auto_.shot);
+            if (!auto_.shot.isEmpty()) (auto_.wholeWindow ? windowImage() : view_->grabFramebuffer()).save(auto_.shot);
             if (!auto_.csv.isEmpty()) plots_->writeCsv(auto_.csv);
             qApp->quit();
         });
     }
+}
+
+// The window as it is on the screen: a widget grab draws the 3D view without its painted overlay
+// (the caption, the navigation cube), so the view's own frame is laid over it.
+QImage MainWindow::windowImage() {
+    QImage shot = grab().toImage();
+    QPainter p(&shot);
+    p.drawImage(QRect(view_->mapTo(this, QPoint(0, 0)), view_->size()), view_->grabFramebuffer());
+    return shot;
 }
 
 void MainWindow::runAutomation(int preset, int frames, const QString& shot, const QString& csv) {
@@ -1283,7 +1296,7 @@ void MainWindow::runAutomation(int preset, int frames, const QString& shot, cons
     ctrl_->setRealtimeLimit(false);
     if (preset < 0 && auto_.editOnly) { // the authored scene as it is: no simulation
         QTimer::singleShot(900, this, [this] {
-            (auto_.wholeWindow ? grab().toImage() : view_->grabFramebuffer()).save(auto_.shot);
+            (auto_.wholeWindow ? windowImage() : view_->grabFramebuffer()).save(auto_.shot);
             qApp->quit();
         });
         return;

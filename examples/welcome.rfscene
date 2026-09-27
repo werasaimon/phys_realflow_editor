@@ -1,0 +1,46 @@
+# PhysRealFlow scene
+world gravity 0 -9.81 0 size 4 3 4 gas 0 magneticGas 0
+entity "Пол"
+  object id 1 visible 1 locked 1
+  shape plane size 3 0.02 3 position 0 0.01 0 rotation 0 0 0 color 0.62 0.64 0.68
+  collider kind auto fit 1 size 0.2 0.2 0.2 offset 0 0 0 rotation 0 0 0
+end
+entity "Горка"
+  object id 2 visible 1 locked 0
+  shape box size 1 0.06 0.5 position 0.3 0.36 -0.2 rotation 0 0 -24 color 0.78 0.6 0.4
+  collider kind auto fit 1 size 0.2 0.2 0.2 offset 0 0 0 rotation 0 0 0
+end
+entity "Мяч"
+  object id 3 visible 1 locked 0
+  shape sphere size 0.2 0.2 0.2 position -0.05 0.68 -0.2 rotation 0 0 0 color 0.31 0.59 0.92
+  rigid density 1200 friction 0.5 restitution 0.5 fixed 0 velocity 0 0 0 spin 0 0 0
+  collider kind auto fit 1 size 0.2 0.2 0.2 offset 0 0 0 rotation 0 0 0
+end
+entity "Кубик 1"
+  object id 4 visible 1 locked 0
+  shape box size 0.2 0.2 0.2 position 1.0 0.12 -0.2 rotation 0 0 0 color 0.91 0.5 0.28
+  rigid density 100 friction 0.5 restitution 0.2 fixed 0 velocity 0 0 0 spin 0 0 0
+  collider kind auto fit 1 size 0.2 0.2 0.2 offset 0 0 0 rotation 0 0 0
+end
+entity "Кубик 2"
+  object id 5 visible 1 locked 0
+  shape box size 0.2 0.2 0.2 position 1.0 0.33 -0.2 rotation 0 0 0 color 0.93 0.77 0.31
+  rigid density 100 friction 0.5 restitution 0.2 fixed 0 velocity 0 0 0 spin 0 0 0
+  collider kind auto fit 1 size 0.2 0.2 0.2 offset 0 0 0 rotation 0 0 0
+end
+entity "Кубик 3"
+  object id 6 visible 1 locked 0
+  shape box size 0.2 0.2 0.2 position 1.0 0.54 -0.2 rotation 0 0 0 color 0.43 0.77 0.38
+  rigid density 100 friction 0.5 restitution 0.2 fixed 0 velocity 0 0 0 spin 0 0 0
+  collider kind auto fit 1 size 0.2 0.2 0.2 offset 0 0 0 rotation 0 0 0
+end
+entity "Ёлка"
+  object id 7 visible 1 locked 0
+  shape cone size 0.3 0.45 0.3 position -0.45 0.235 0.6 rotation 0 0 0 color 0.3 0.62 0.36
+end
+entity "Бочка"
+  object id 8 visible 1 locked 0
+  shape cylinder size 0.24 0.34 0.24 position 0.45 0.18 0.6 rotation 0 0 0 color 0.72 0.47 0.88
+  rigid density 400 friction 0.5 restitution 0.2 fixed 0 velocity 0 0 0 spin 0 0 0
+  collider kind capsule fit 1 size 0.2 0.2 0.2 offset 0 0 0 rotation 0 0 0
+end

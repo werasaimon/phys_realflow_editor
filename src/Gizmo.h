@@ -80,6 +80,9 @@ public:
     void setMode(GizmoMode m) { mode_ = m; }
     GizmoMode mode() const { return mode_; }
     void setLocal(bool on) { local_ = on; } // turn with the object (else the world axes)
+    // The size on screen as a factor of 110 px (the + / - keys), 0.5 .. 2.5.
+    void setScreenScale(float s) { screenScale_ = s < 0.5f ? 0.5f : (s > 2.5f ? 2.5f : s); }
+    float screenScale() const { return screenScale_; }
     bool local() const { return local_; }
     void setTarget(const rf::Vector3& position, const rf::Quaternion& rotation);
     const rf::Vector3& position() const { return position_; }
@@ -93,6 +96,9 @@ public:
     void beginFloorDrag(const GizmoView& v, const rf::Vector2& mouse, const rf::Vector3& hit);
     GizmoPose drag(const GizmoView& v, const rf::Vector2& mouse, bool snap);
     void end();
+    // During a handle drag: X / Y / Z switch it to that axis, Shift+X / Y / Z to the plane across it
+    // (moving only), as if that handle had been grabbed at the press (Blender's axis locking).
+    void switchHandle(GizmoHandle h, const GizmoView& v);
     bool dragging() const { return active_ != GizmoHandle::None; }
     GizmoHandle activeHandle() const { return active_; }
     float dragAngleDeg() const { return angleDeg_; } // the turn so far
@@ -145,6 +151,7 @@ private:
 
     GizmoMode mode_ = GizmoMode::Translate;
     bool local_ = false;
+    float screenScale_ = 1.0f;
     rf::Vector3 position_{0.0f};
     rf::Quaternion rotation_;
     GizmoHandle hover_ = GizmoHandle::None;

@@ -8,6 +8,7 @@
 #include "RoleBar.h"
 
 #include <QAction>
+#include <QApplication>
 #include <QCheckBox>
 #include <QFile>
 #include <QFileInfo>
@@ -27,22 +28,9 @@ using namespace rf;
 namespace {
 
 // Colours for new shapes, in turn, so neighbours differ at a glance.
+const float kSpawnHeight = 0.8f; // a new shape appears this high over the floor (its bottom)
 const Vector3 kPalette[] = {{0.91f, 0.50f, 0.28f}, {0.31f, 0.59f, 0.92f}, {0.43f, 0.77f, 0.38f}, {0.93f, 0.77f, 0.31f},
                             {0.72f, 0.47f, 0.88f}, {0.33f, 0.80f, 0.80f}, {0.93f, 0.42f, 0.55f}};
-
-void setRole(Entity& e, RoleIcon role, bool on) {
-    switch (role) {
-    case RoleIcon::Rigid: e.rigid.enabled = on; break;
-    case RoleIcon::Soft: e.soft.enabled = on; break;
-    case RoleIcon::Liquid: e.liquid.enabled = on; break;
-    case RoleIcon::Cloth: e.cloth.enabled = on; break;
-    case RoleIcon::Magnet: e.magnet.enabled = on; break;
-    case RoleIcon::Smoke: e.emitter.enabled = on; break;
-    case RoleIcon::Flame: e.flammable.enabled = on; break;
-    case RoleIcon::Heat: e.heat.enabled = on; break;
-    case RoleIcon::Count: break;
-    }
-}
 
 bool madeOfSomething(const Entity& e) { return e.rigid.enabled || e.soft.enabled || e.liquid.enabled || e.cloth.enabled; }
 
@@ -157,7 +145,12 @@ void SceneBuilder::onPlayEditApplied(bool ok, const std::vector<uint32_t>& bodyE
 // A change the running simulation cannot take: stop with the edit kept, and say what to do.
 void SceneBuilder::reloadNeeded(const QString& why) {
     returnToEdit(true);
-    emit statusMessage(why + ". Правка сохранена — нажмите ▶ Пуск.");
+    showBanner(why + ". Правка сохранена.", "▶ Пуск", [this] { play(); });
+    stickyBanner_ = true;
+}
+
+void SceneBuilder::showBanner(const QString& text, const QString& buttonText, std::function<void()> fix) {
+    banner_->showMessage(text, buttonText, std::move(fix));
 }
 
 // ---------------------------------------------------------------------------
@@ -191,13 +184,14 @@ void SceneBuilder::addEntity(ShapeKind shape) {
         e.color = Vector3(0.62f, 0.64f, 0.68f);
     } else {
         e.position = freeSpot();
-        e.position.y = 0.5f * e.size.y; // standing on the floor
+        e.position.y = kSpawnHeight + 0.5f * e.size.y; // in the air: given a body and ▶, it falls
     }
     graph_.entities.push_back(e);
     setSelected(e.id);
     refreshList();
     applyEdit(e.id);
     frameObjects();
+    emit firstAction();
 }
 
 bool SceneBuilder::importModel(const QString& path, QString& error) {
@@ -226,35 +220,6 @@ bool SceneBuilder::importModel(const QString& path, QString& error) {
     applyEdit(e.id);
     frameObjects();
     return true;
-}
-
-void SceneBuilder::removeSelected() {
-    const int i = indexOf(selectedId_);
-    if (i < 0) return;
-    prepareEdit(selectedId_);
-    remember();
-    graph_.entities.erase(graph_.entities.begin() + i);
-    const int next = std::min(i, int(graph_.entities.size()) - 1);
-    selectedId_ = next >= 0 && !graph_.entities[size_t(next)].locked ? graph_.entities[size_t(next)].id : 0;
-    refreshList();
-    fillInspector();
-    applyEdit(0);
-}
-
-void SceneBuilder::duplicateSelected() {
-    if (!selectedEntity()) return;
-    prepareEdit(selectedId_);
-    remember();
-    Entity e = *selectedEntity();
-    e.id = newId();
-    e.name += " копия";
-    e.position.y += e.size.y + 0.02f; // on top of the original
-    e.locked = false;
-    graph_.entities.push_back(e);
-    setSelected(e.id);
-    refreshList();
-    applyEdit(e.id);
-    frameObjects();
 }
 
 void SceneBuilder::toggleVisible(uint32_t id) {
@@ -299,10 +264,12 @@ void SceneBuilder::toggleRole(RoleIcon role) {
     if (on && isMadeOfRole(role)) // made of one thing at a time
         for (RoleIcon other : {RoleIcon::Rigid, RoleIcon::Soft, RoleIcon::Liquid, RoleIcon::Cloth}) setRole(*e, other, false);
     setRole(*e, role, on);
+    keepComponentsConsistent(*e, role, on);
     if (on) switchOnWhatRoleNeeds(*e, role);
     fillInspector();
     refreshList();
     applyEdit(selectedId_);
+    emit firstAction();
 }
 
 // The magic, only where it cannot surprise: a role switches on what IT needs to work.
@@ -320,9 +287,10 @@ void SceneBuilder::switchOnWhatRoleNeeds(Entity& e, RoleIcon role) {
         emit statusMessage("Ткань будет висеть на пруте; края закрепляются в разделе «Ткань»");
         break;
     case RoleIcon::Magnet:
-        if (!madeOfSomething(e)) { // a magnet needs a body to push
+        if (!madeOfSomething(e)) { // a magnet needs a body to push, and the body a collider
             e.rigid.enabled = true;
             e.rigid.fixed = false;
+            e.collider.enabled = true;
         }
         if (e.magnet.moment.x == 0 && e.magnet.moment.y == 0 && e.magnet.moment.z == 0) e.magnet.moment = Vector3(0, 1, 0);
         break;
@@ -334,6 +302,20 @@ void SceneBuilder::switchOnWhatRoleNeeds(Entity& e, RoleIcon role) {
     case RoleIcon::Heat: needGas("тепло поднимает воздух"); break;
     default: break;
     }
+}
+
+// The collider pairs with a rigid body or stands alone (a fixed obstacle), as in Unity: adding
+// "Твёрдое тело" adds a collider "Авто"; a soft body, liquid or cloth has no rigid collider.
+void SceneBuilder::keepComponentsConsistent(Entity& e, RoleIcon role, bool on) {
+    if (!on) return;
+    if (role == RoleIcon::Rigid && !e.collider.enabled) {
+        e.collider.enabled = true;
+        e.collider.kind = ColliderKind::Auto;
+        emit statusMessage("Добавлен коллайдер «Авто»: тело сталкивается своей формой");
+    }
+    if (role == RoleIcon::Collider)
+        for (RoleIcon other : {RoleIcon::Soft, RoleIcon::Liquid, RoleIcon::Cloth}) setRole(e, other, false);
+    if (role == RoleIcon::Soft || role == RoleIcon::Liquid || role == RoleIcon::Cloth) e.collider.enabled = false;
 }
 
 // ---------------------------------------------------------------------------
@@ -385,67 +367,8 @@ void SceneBuilder::onListClicked(QTreeWidgetItem* item, int column) {
         applyEdit(id);
         return;
     }
-    setSelected(id);
-}
-
-void SceneBuilder::setSelected(uint32_t id) {
-    selectedId_ = indexOf(id) >= 0 ? id : 0;
-    {
-        const QSignalBlocker quiet(list_);
-        list_->clearSelection();
-        for (int r = 0; r < list_->topLevelItemCount(); ++r)
-            if (list_->topLevelItem(r)->data(0, Qt::UserRole).toUInt() == selectedId_) list_->setCurrentItem(list_->topLevelItem(r));
-    }
-    fillInspector();
-    sendViewportFlags();
-    updateGizmoTarget();
-}
-
-// ---------------------------------------------------------------------------
-// The gizmo: a drag is one undo step; Esc puts the object back as it was
-// ---------------------------------------------------------------------------
-void SceneBuilder::onGizmoStarted() {
-    Entity* e = selectedEntity();
-    gizmoEntity_ = 0;
-    if (!e || !gizmoAllowed()) return;
-    remember();
-    if (!editing() && liveTargetValid_) e->position = liveTarget_; // on pause: from where it is now
-    gizmoEntity_ = e->id;
-    gizmoStart_ = *e;
-}
-
-void SceneBuilder::onGizmoMoved(const GizmoPose& pose) {
-    const int i = indexOf(gizmoEntity_);
-    if (i < 0) return;
-    Entity& e = graph_.entities[size_t(i)];
-    switch (pose.mode) {
-    case GizmoMode::Translate: e.position = pose.position; break;
-    case GizmoMode::Rotate: e.rotationDeg = eulerDegFromQuaternion(pose.rotation); break;
-    case GizmoMode::Scale: e.size = vmax(gizmoStart_.size * pose.scale, Vector3(0.005f)); break;
-    case GizmoMode::Select: break;
-    }
-    if (editing()) refreshView(); // on pause the simulation takes the new pose on release
-    else updateGizmoTarget();
-    showTransform(e);
-}
-
-void SceneBuilder::onGizmoFinished() {
-    const uint32_t id = gizmoEntity_;
-    gizmoEntity_ = 0;
-    fillInspector();
-    if (!editing() && id) applyEdit(id);
-}
-
-void SceneBuilder::onGizmoCancelled() {
-    const int i = indexOf(gizmoEntity_);
-    gizmoEntity_ = 0;
-    if (i < 0) return;
-    graph_.entities[size_t(i)] = gizmoStart_;
-    if (!undo_.empty()) undo_.pop_back(); // nothing happened: no undo step either
-    updateHistoryActions();
-    fillInspector();
-    if (editing()) refreshView();
-    else updateGizmoTarget();
+    if (QApplication::keyboardModifiers() & (Qt::ShiftModifier | Qt::ControlModifier)) toggleSelected(id);
+    else setSelected(id);
 }
 
 // ---------------------------------------------------------------------------
@@ -509,6 +432,7 @@ void SceneBuilder::setMode(Mode m) {
                                : "Идёт симуляция: роли и числа меняются на лету, на паузе работает гизмо. "
                                  "■ Стоп вернёт сцену, какой она была до ▶.");
     if (editing()) refreshView();
+    else refreshColliderGuides(); // the play-mode lines come with the next snapshot
     refreshScenery();
     sendViewportFlags();
     updateGizmoTarget();
@@ -517,6 +441,9 @@ void SceneBuilder::setMode(Mode m) {
 
 void SceneBuilder::play() {
     if (mode_ == Mode::Playing) return;
+    stickyBanner_ = false;
+    refreshBanner();
+    emit firstAction();
     if (editing()) loadIntoSimulation();
     ctrl_->setRunning(true);
     setMode(Mode::Playing);
@@ -623,6 +550,7 @@ void SceneBuilder::refreshView() {
     emit editSnapshot(editView_.snapshot(graph_, displayName(), bodyEntity_));
     sendViewportFlags();
     updateGizmoTarget();
+    refreshColliderGuides();
 }
 
 void SceneBuilder::onBodiesMapped(const std::vector<uint32_t>& bodyEntity) {
@@ -661,7 +589,7 @@ void SceneBuilder::sendViewportFlags() {
         const uint32_t id = bodyEntity_[b];
         const int i = indexOf(id);
         if (i < 0) continue;
-        if (id == selectedId_) selected.push_back(int(b));
+        if (isSelected(id)) selected.push_back(int(b));
         else if (id == hoverId_ && editing()) hovered.push_back(int(b));
         if (editing() && entityIsGeometryOnly(graph_.entities[size_t(i)])) ghosts.push_back(int(b));
         unpickable[b] = graph_.entities[size_t(i)].locked;
@@ -682,6 +610,7 @@ void SceneBuilder::updateGizmoTarget() {
 
 // On pause the gizmo sits where the selected object's body is now, not where it was put.
 void SceneBuilder::onSimulationSnapshot(const RenderSnapshot& s) {
+    if (!editing() && !sample_) playColliderGuides(s);
     if (editing() || sample_ || gizmoEntity_) return;
     const int body = bodyOfEntity(selectedId_);
     const bool valid = body >= 0 && body < int(s.bodies.size());
@@ -742,9 +671,8 @@ void SceneBuilder::newScene() {
     floor.size = Vector3(graph_.world.size.x, 0.02f, graph_.world.size.z);
     floor.position = Vector3(0.0f, 0.01f, 0.0f);
     floor.color = Vector3(0.52f, 0.55f, 0.60f);
-    floor.rigid.enabled = true;
-    floor.rigid.fixed = true;
-    floor.locked = true; // clicks on the floor select nothing; it is still in the list
+    floor.collider.enabled = true; // a collider alone: a fixed obstacle, as Unity's static colliders
+    floor.locked = true;           // clicks on the floor select nothing; it is still in the list
     graph_.entities.push_back(floor);
     selectedId_ = 0;
     fillWorld();

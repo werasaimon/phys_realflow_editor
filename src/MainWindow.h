@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ControlScheme.h"
 #include "Gizmo.h"
 #include "SimController.h"
 
@@ -29,8 +30,17 @@ public:
     // Automation: load a preset (-1: the scene builder's new scene), simulate `frames` frames, save
     // a screenshot and/or CSV, quit.
     void runAutomation(int preset, int frames, const QString& screenshotPath, const QString& csvPath);
-    // The first start without a preset: the builder's new scene (a floor), in edit mode.
-    void startBuilder();
+    // The builder's first scene (MainWindowStart.cpp): the --scene file; on the very first start of
+    // an interactive session the welcome scene with the first-minute bubble; else an empty floor.
+    void startBuilder(bool interactive = false);
+    // The first-minute bubble even if it was seen before (the command line's --first-start).
+    void setForceFirstStart(bool on) { forceFirstStart_ = on; }
+    QString firstMinuteText() const; // what the bubble says now (empty: gone)
+    // "Примеры": the gallery of every ready-made scene; a click opens one.
+    void openGallery();
+    void runGalleryShot(const QString& file); // the gallery with all its pictures as a PNG, then quit
+    // Only the 3D view, no window on the screen: the gallery's pictures (--thumbnail). Before show().
+    void setThumbnailMode();
     // The builder starts on this scene file instead of an empty floor (the command line's --scene).
     void setStartScene(const QString& path) { startScene_ = path; }
     // The screenshot of the automation shows the whole window (panels too), not only the 3D view.
@@ -43,6 +53,7 @@ public:
 
 private:
     // UI construction
+    void connectViewport();       // the stir, the mouse joint, the software-OpenGL restart
     void buildActions();
     void buildParameterDock();
     void buildVisualDock();
@@ -89,6 +100,23 @@ private:
     void screenshot();
     void showHelp();
     void showAbout();
+    QImage windowImage(); // the window with the 3D view's overlay, for screenshots
+
+    // The first minute (MainWindowStart.cpp)
+    static QString examplesDir();
+    void startFirstMinute();
+    void showFirstMinuteStep();
+    void onFirstMinuteAction();
+    void finishFirstMinute();
+
+    // Keys and mouse schemes (MainWindowControls.cpp)
+    void buildEditMenu();                   // "Правка": every key as an action
+    void buildViewKeys(class QMenu* menu);  // numpad views, gizmo size
+    void buildControlsMenu();               // Вид -> Управление
+    void applyControlScheme(ControlScheme s);
+    void askControlScheme();                // once, at the first start
+    void appendShortcutTips();
+    void connectViewportControls();
 
     std::unique_ptr<SimController> ctrl_;
     Viewport* view_ = nullptr;
@@ -101,6 +129,8 @@ private:
     class QActionGroup* samplesGroup_ = nullptr;
     QAction* expertAct_ = nullptr;
     QAction* graphsAct_ = nullptr;
+    QAction* collidersAct_ = nullptr; // every object's collider as a green wireframe, not only the selected one's
+    class QTabWidget* inspectorTabs_ = nullptr; // "Сцена" | "Объект"
     QAction* playAct_ = nullptr;
     QAction* pauseAct_ = nullptr;
     QAction* stopAct_ = nullptr;
@@ -116,6 +146,14 @@ private:
     PlotPanel* plots_ = nullptr;
     SceneBuilder* builder_ = nullptr;
     QString startScene_;
+    class QToolBar* createBar_ = nullptr;
+    class FirstStartHint* hint_ = nullptr;
+    QAction* deleteAct_ = nullptr;
+    QAction* duplicateAct_ = nullptr;
+    class QActionGroup* schemeGroup_ = nullptr;
+    QLabel* hintLabel_ = nullptr; // the status bar: what the mouse buttons and keys do now
+    int hintStep_ = 0; // 0: press Куб, 1: the tile Твёрдое, 2: ▶
+    bool forceFirstStart_ = false;
     QLabel* status_ = nullptr;
 
     // Mouse brush (GUI-side settings, applied through Disturbance commands)

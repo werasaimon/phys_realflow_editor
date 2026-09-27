@@ -131,7 +131,7 @@ Vector3 Gizmo::axis(int k) const {
     return local_ || mode_ == GizmoMode::Scale ? normalize(rotation_.rotate(e)) : e;
 }
 
-float Gizmo::armLength(const GizmoView& v) const { return kArrowPixels * v.worldPerPixel(position_); }
+float Gizmo::armLength(const GizmoView& v) const { return kArrowPixels * screenScale_ * v.worldPerPixel(position_); }
 
 bool Gizmo::axisUsable(const GizmoView& v, int k) const {
     return length(v.project(position_ + axis(k) * armLength(v)) - v.project(position_)) > 16.0f;
@@ -267,6 +267,17 @@ void Gizmo::begin(GizmoHandle h, const GizmoView& v, const Vector2& mouse) {
         planeNormal_ = isPlane(h) ? axes_[planeOf(h)] : v.forward(); // the centre: the plane facing the eye
         if (!rayPlane(r, planePoint_, planeNormal_, startHit_)) startHit_ = position_;
     }
+}
+
+void Gizmo::switchHandle(GizmoHandle h, const GizmoView& v) {
+    if (!dragging() || modal_ || h == active_ || h == GizmoHandle::None) return;
+    if (isPlane(h) && dragMode_ != GizmoMode::Translate) return; // a plane only moves
+    const GizmoMode was = mode_;
+    mode_ = dragMode_;
+    position_ = startPosition_;
+    rotation_ = startRotation_;
+    begin(h, v, startMouse_);
+    mode_ = was;
 }
 
 void Gizmo::beginFloorDrag(const GizmoView& v, const Vector2& mouse, const Vector3& hit) {

@@ -4,9 +4,11 @@
 // Needs only OpenGL 3.0 (GLSL 1.30): runs on any GPU of the last ~15 years and on the CPU through
 // Mesa llvmpipe (--software-gl). A 3.3 core context is used when the driver offers one.
 
+#include "ControlScheme.h"
 #include "EditView.h"
 #include "FluidSurfaceRenderer.h"
 #include "Gizmo.h"
+#include "NavCube.h"
 #include "OrbitCamera.h"
 #include "ViewportTools.h"
 #include "scene/Simulation.h"
@@ -24,7 +26,10 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <set>
 #include <string>
+
+class QTimer;
 
 class Viewport : public QOpenGLWidget, protected QOpenGLExtraFunctions {
     Q_OBJECT
@@ -52,8 +57,23 @@ public:
     static QColor colormapColor(int map, float t);
     float renderFps() const { return fps_; }
 
-    // Interaction (used by the ViewportTool strategies)
+    // Interaction (used by the ViewportTool strategies; ViewportInput.cpp)
     OrbitCamera& camera() { return camera_; }
+    // Which mouse button moves the camera, and how (ControlScheme.h).
+    void setControlScheme(ControlScheme s) { scheme_ = s; updateHint(); }
+    ControlScheme controlScheme() const { return scheme_; }
+    CameraMove cameraMoveFor(Qt::MouseButton b, Qt::KeyboardModifiers m) const { return ::cameraMoveFor(scheme_, b, m); }
+    // What the cursor is on (an object, a body), else the floor: the camera orbits and zooms around it.
+    QVector3D pointUnderCursor(const QPointF& pos) const;
+    bool flying() const { return rightHeld_ && !flyKeys_.empty(); } // the right button held with W A S D
+    bool flewThisPress() const { return flew_; } // W A S D were used while the right button was down (no menu then)
+    // Looks along ball k of the navigation cube (+X, -X, +Y, -Y, +Z, -Z): the numpad views too.
+    void viewAlong(int k);
+    const NavCube& navCube() const { return navCube_; }
+    // What the mouse buttons and keys do right now, for the status bar (hintChanged when it changes).
+    QString mouseHint() const;
+    // The time step and frame rate line under the title: for the expert mode only.
+    void setShowStats(bool on) { showStats_ = on; update(); }
     // Point on the cursor ray inside the domain: on the slice plane if hit, else mid-domain.
     bool pickPoint(const Ray& ray, rf::Vector3& hit) const;
     // Nearest rigid body hit by the ray (exact ray cast against its convex shape).
@@ -74,6 +94,11 @@ public:
     // outline, and the solver's markers (the gas's heat source) are not drawn - its objects show that.
     void setAuthoringScene(bool on) { authoring_ = on; update(); }
     void setGhostBodies(const std::vector<int>& bodies) { ghostBodies_ = bodies; update(); }
+    // The collider wireframes: pairs of points, x y z state (ColliderGuides::State: moving, fixed, asleep).
+    void setColliderGuides(std::vector<float> lines);
+    // The 2D text over the view (the scene's name, the legends, the axes); off for the gallery's pictures.
+    void setOverlayVisible(bool on) { overlayVisible_ = on; update(); }
+    const std::vector<float>& colliderGuides() const { return colliderGuides_; }
     void setUnpickableBodies(const std::vector<char>& flags) { unpickable_ = flags; }
     bool unpickable(int body) const { return body >= 0 && body < int(unpickable_.size()) && unpickable_[size_t(body)]; }
     void showProbe(const Ray& ray, const rf::Vector3& hit);
@@ -117,6 +142,10 @@ signals:
     void gizmoFinished();                             // confirmed: one step of the undo history
     void gizmoCancelled();                            // Esc / right button: put the object back
     void editContextMenu(QPointF pos);                // edit mode: a right click without a drag
+    void entityToggled(uint32_t id);                  // edit mode: Shift / Ctrl + click on an object
+    void boxSelected(QRectF rect, Qt::KeyboardModifiers modifiers); // edit mode: the selection box, released
+    void frameSelectedRequested();                    // edit mode: a double click (F)
+    void hintChanged(QString hint);                   // what the buttons and keys do now changed
     // The GPU / driver cannot do OpenGL 3.0: the window offers a restart in software mode.
     void openGLUnsupported(QString renderer);
 
@@ -129,7 +158,10 @@ protected:
     void mouseReleaseEvent(QMouseEvent* e) override;
     void wheelEvent(QWheelEvent* e) override;
     void mouseDoubleClickEvent(QMouseEvent* e) override;
+    void leaveEvent(QEvent* e) override;
     void keyPressEvent(QKeyEvent* e) override;
+    void keyReleaseEvent(QKeyEvent* e) override;
+    void focusOutEvent(QFocusEvent* e) override;
     bool event(QEvent* e) override; // a keyboard transform takes the keys its shortcuts would get
 
 private:
@@ -140,6 +172,12 @@ private:
     };
 
     void buildShaders();
+    void beginFrame();
+    void drawFloorAndDomain(const QMatrix4x4& vp);
+    void drawScene(const QMatrix4x4& view, const QMatrix4x4& proj);
+    void drawOverlays3D(const QMatrix4x4& vp);
+    void drawColliderGuides(const QMatrix4x4& vp);
+    void countFrame();
     void uploadObstacle(const rf::TriMesh& mesh);
     void drawBackground();
     void drawLines(const std::vector<float>& data, GLenum mode, const QMatrix4x4& vp, const QVector4D& color, float width);
@@ -166,6 +204,13 @@ private:
     void drawGizmo(const QMatrix4x4& vp);
     void drawEditLabel(class QPainter& p); // the live amount of a drag next to the cursor
     bool modalKey(QKeyEvent* e);
+    void dragKey(QKeyEvent* e);        // X / Y / Z during a handle drag
+    bool flyKey(QKeyEvent* e, bool down);
+    void flyTick();
+    void stopFlying();
+    bool navPress(QMouseEvent* e);     // the navigation cube takes the press
+    void updateHint();
+    void drawSelectionBox(class QPainter& p);
     void modalDrag(); // the keyboard changed the transform: recompute it at the cursor
     void drawJoints(const QMatrix4x4& vp);
     ViewportTool& toolFor(Qt::MouseButton button, const QPointF& pos);
@@ -213,7 +258,7 @@ private:
     bool glOk_ = true;   // OpenGL 3.0 or newer available
     QString glslHeader_; // "#version 330 core" on 3.3 core contexts, "#version 130" on 3.0
     OrbitCamera camera_;
-    OrbitTool orbitTool_;
+    CameraTool cameraTool_;
     DisturbTool disturbTool_;
     GrabTool grabTool_;
     EditTool editTool_;
@@ -228,6 +273,20 @@ private:
     std::vector<char> unpickable_; // per body: the mouse passes through
     std::vector<int> hoverBodies_, ghostBodies_;
     std::vector<rf::RenderSnapshot::Body> scenery_;
+    std::vector<float> colliderGuides_;
+    bool overlayVisible_ = true;
+    bool showStats_ = false;
+    ControlScheme scheme_ = ControlScheme::Simple;
+    NavCube navCube_;
+    int navHover_ = NavCube::kOutside, navPressHit_ = NavCube::kOutside;
+    bool navPressed_ = false, navDragged_ = false;
+    QPoint navLast_;
+    bool rightHeld_ = false, flew_ = false; // the right button is down; W A S D were used during it
+    std::set<int> flyKeys_;
+    QTimer* flyTimer_ = nullptr;
+    QElapsedTimer flyClock_;
+    QString lastHint_;
+    std::vector<float> guidesByState_[3]; // the same lines sorted by state: one colour per draw
     bool authoring_ = false;
     std::vector<const rf::RenderSnapshot::Body*> drawnBodies_;
     bool editMode_ = false, gizmoVisible_ = false;

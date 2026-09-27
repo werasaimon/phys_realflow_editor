@@ -5,10 +5,14 @@
 #include "math/Vector3.h"
 
 #include <QDoubleSpinBox>
+#include <QFrame>
 #include <QWidget>
+
+#include <functional>
 
 class QLabel;
 class QPushButton;
+class QToolButton;
 class QVBoxLayout;
 
 // A number field for the inspector: fixed range, step and decimals; typing counts only on Enter.
@@ -47,4 +51,45 @@ private:
     QWidget* bodyWidget_ = nullptr;
     QVBoxLayout* bodyLayout_ = nullptr;
     bool open_ = false;
+};
+
+// A component of an object as a card, as in Unity's inspector: a header with the component's icon
+// and title that folds the card open and shut, and an ✕ that removes the component. Opens when
+// added, so the numbers of what was just added are in view.
+class ComponentCard : public QFrame {
+    Q_OBJECT
+public:
+    ComponentCard(const QString& title, const QIcon& icon, QWidget* parent = nullptr);
+    QVBoxLayout* body() { return bodyLayout_; }
+    void setOpen(bool open);
+    bool isOpen() const { return open_; }
+    const QString& title() const { return title_; }
+
+signals:
+    void removeClicked();
+
+private:
+    QPushButton* header_ = nullptr;
+    QToolButton* remove_ = nullptr;
+    QWidget* bodyWidget_ = nullptr;
+    QVBoxLayout* bodyLayout_ = nullptr;
+    QString title_;
+    bool open_ = true;
+};
+
+// One sentence saying why something does not work (yet) and, where possible, a button that fixes
+// it: "Дыму нужен воздух — [Включить газ]". No dialog to click away: the banner sits in the panel
+// until the cause is gone.
+class InlineBanner : public QFrame {
+    Q_OBJECT
+public:
+    explicit InlineBanner(QWidget* parent = nullptr);
+    void showMessage(const QString& text, const QString& buttonText = {}, std::function<void()> fix = {});
+    void clearMessage();
+    QString message() const; // what it says now (empty: hidden)
+
+private:
+    QLabel* text_ = nullptr;
+    QPushButton* button_ = nullptr;
+    std::function<void()> fix_;
 };

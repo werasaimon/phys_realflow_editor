@@ -20,9 +20,16 @@
 // the box, the gas) needs the scene rebuilt: then the builder stops and says why. On pause the gizmo
 // works on the object where it is now.
 //
-// The builder owns an rf::SceneGraph (saved as *.rfscene) and shows two panels: the scene list (what
-// is there, the eye and the lock of each thing, and the world) and the inspector (the "Объект" block
-// every thing has, the shape, and only the details of the roles that are on).
+// The builder owns an rf::SceneGraph (saved as *.rfscene) and shows two tabs, as Unity's hierarchy
+// and inspector: "Сцена" (what is there, the eye and the lock of each thing, and the world) and
+// "Объект" (the selected thing, top to bottom: a quick palette of components, the "Объект" card
+// every thing has - name, visibility, lock, colour, position, rotation, size -, the "Геометрия" card
+// - what it looks like, which physics never changes -, then only the COMPONENTS it has, each a card
+// with an ✕, and "+ Добавить компонент"). The collider is a component of its own: alone it makes a
+// fixed obstacle, with "Твёрдое тело" a moving body; adding "Твёрдое тело" adds a collider "Авто",
+// as Unity's primitives come with theirs. The collider is drawn as a thin green wireframe over the
+// geometry (Houdini's collision guide): always for the selected object, for all with "Коллайдеры".
+#include "ColliderGuides.h"
 #include "EditView.h"
 #include "Gizmo.h"
 #include "Icons.h"
@@ -31,12 +38,17 @@
 
 #include <QElapsedTimer>
 #include <QObject>
+#include <QRectF>
 
 #include <functional>
+#include <map>
 #include <memory>
+#include <string>
 #include <vector>
 
-class CollapsibleSection;
+class ColliderPanel;
+class ComponentCard;
+class InlineBanner;
 class ObjectInspector;
 class QAction;
 class QCheckBox;
@@ -44,6 +56,8 @@ class QComboBox;
 class QDoubleSpinBox;
 class QFormLayout;
 class QLabel;
+class QMenu;
+class QPushButton;
 class QTreeWidget;
 class QTreeWidgetItem;
 class QVBoxLayout;
@@ -104,7 +118,23 @@ public:
     void toggleRole(RoleIcon role);
     void toggleVisible(uint32_t id);
     void toggleLocked(uint32_t id);
-    void frameSelected(); // the camera shows the selected object (F)
+    void frameSelected(); // the camera shows the selected objects (F); nothing selected: all
+    void frameAll() { frameObjects(); } // Home
+    // The collider wireframes of all objects (the toolbar's "Коллайдеры"); the selected one always.
+    void setShowAllColliders(bool on);
+    // The first-minute hint and the like: one sentence and a button that fixes the cause.
+    void showBanner(const QString& text, const QString& buttonText = {}, std::function<void()> fix = {});
+
+    // The selection: one object is active (the inspector and the gizmo show it); Shift / Ctrl + click
+    // and the selection box add more. Delete, duplicate, hide and the gizmo act on all of them
+    // (SceneBuilderSelection.cpp).
+    const std::vector<uint32_t>& selection() const { return selection_; }
+    bool isSelected(uint32_t id) const;
+    void toggleSelected(uint32_t id); // Shift / Ctrl + click
+    void selectAll();                 // Ctrl+A: every visible, unlocked object
+    void selectInRect(const QRectF& rect, const GizmoView& view, bool add, bool remove); // the box
+    void hideSelected();              // H
+    void unhideAll();                 // Alt+H
 
     // Scripted edits (the self-test, later a script console): one undo step each.
     void select(uint32_t id) { setSelected(id); }
@@ -122,6 +152,9 @@ signals:
     void gizmoTarget(bool visible, rf::Vector3 position, rf::Quaternion rotation);
     void frameRequested(const rf::AABB& box);              // show these objects (after a load or an add)
     void sceneryBodies(std::vector<rf::RenderSnapshot::Body> bodies); // play: geometry without a role, drawn as is
+    void selectionChanged(uint32_t id);                    // the "Объект" tab shows it (0: nothing selected)
+    void colliderGuides(std::vector<float> lines);         // green wireframes: pairs of points, x y z 0 each
+    void firstAction();                                    // the user did something: the first-start hint goes
 
 private:
     // Building the panels
@@ -130,10 +163,14 @@ private:
     void buildWorldSection(QVBoxLayout* col);
     void buildInspector();
     void buildHeader(QVBoxLayout* col);
-    void buildShapeBlock(QVBoxLayout* col);
-    void buildMaterialSections(QVBoxLayout* col);  // rigid, soft, liquid, cloth
-    void buildBehaviourSections(QVBoxLayout* col); // magnet, smoke, burns, heat
-    CollapsibleSection* roleSection(QVBoxLayout* col, RoleIcon role, QFormLayout*& form);
+    void buildObjectCard(QVBoxLayout* col);        // what every thing has, and the size
+    void buildGeometryCard(QVBoxLayout* col);      // what it looks like
+    void buildMaterialCards(QVBoxLayout* col);     // rigid (+ the no-collider warning), soft, liquid, cloth
+    void buildColliderCard(QVBoxLayout* col);
+    void buildBehaviourCards(QVBoxLayout* col);    // magnet, emitter, burns, heat
+    void buildAddComponent(QVBoxLayout* col);      // "+ Добавить компонент" and its menu
+    void fillAddMenu();                            // the components the object does not have yet
+    ComponentCard* componentCard(QVBoxLayout* col, RoleIcon role, QFormLayout*& form);
     QDoubleSpinBox* numberField(QFormLayout* f, const QString& label, double min, double max, double step, int decimals);
     QCheckBox* checkField(QFormLayout* f, const QString& text);
     Vec3Row* vectorField(QFormLayout* f, const QString& label, double min, double max, double step, int decimals);
@@ -148,11 +185,14 @@ private:
     void addEntity(rf::ShapeKind shape);
     rf::Vector3 freeSpot() const;               // a place on the floor no other object stands on
     void switchOnWhatRoleNeeds(rf::Entity& e, RoleIcon role);
+    void keepComponentsConsistent(rf::Entity& e, RoleIcon role, bool on); // the collider goes with a rigid body
     void onObjectEdited();
     void onDetailsEdited();
     void onWorldEdited();
     void onListClicked(QTreeWidgetItem* item, int column);
-    void setSelected(uint32_t id);
+    void setSelected(uint32_t id);                              // just this one (0: nothing)
+    void setSelection(std::vector<uint32_t> ids, uint32_t active); // every change of the selection goes here
+    void syncListSelection();                                   // the scene list shows the selection
 
     // Graph <-> widgets
     void fillInspector();
@@ -162,6 +202,7 @@ private:
     void refreshList();
     void refreshHeader();
     void refreshSections();
+    void refreshBanner();       // what does not work for the selected object, and the fix
     void showTransform(const rf::Entity& e); // the gizmo moved it: the numbers follow, not an edit
 
     // History: every change can be undone (Ctrl+Z) and redone (Ctrl+Shift+Z)
@@ -182,6 +223,11 @@ private:
     void frameObjects(); // asks the viewport to show the things of the scene, not the empty world
     void sendViewportFlags();
     void updateGizmoTarget();
+    // The collider wireframes: from the graph in edit mode, from the bodies while the scene plays.
+    void refreshColliderGuides();
+    void playColliderGuides(const rf::RenderSnapshot& s);
+    // The collider of an entity as the simulation will build it, kept until its shape or size changes.
+    const rf::EntityCollider& cachedCollider(const rf::Entity& e);
 
     // Lookups
     int indexOf(uint32_t id) const;
@@ -210,8 +256,14 @@ private:
     std::vector<rf::SceneGraph> undo_, redo_;
     QElapsedTimer lastRemember_;
 
-    uint32_t gizmoEntity_ = 0;     // the entity the gizmo is dragging
-    rf::Entity gizmoStart_;        // it, as it was when the drag began (Esc puts it back)
+    ColliderGuides guides_;
+    bool showAllColliders_ = false;
+    // Edit mode: the collider of each entity, rebuilt only when its geometry or collider changes.
+    std::map<uint32_t, std::pair<std::string, rf::EntityCollider>> editColliders_;
+
+    uint32_t gizmoEntity_ = 0;     // the active entity the gizmo is dragging
+    std::map<uint32_t, rf::Entity> gizmoStarts_; // every dragged entity as it was when the drag began (Esc puts them back)
+    std::vector<uint32_t> selection_; // every selected entity, the active one (selectedId_) among them
 
     std::vector<QAction*> createActions_;
     QAction *undoAct_ = nullptr, *redoAct_ = nullptr, *deselectAct_ = nullptr;
@@ -227,14 +279,21 @@ private:
     QWidget* inspectorBody_ = nullptr;
     QLabel* emptyHint_ = nullptr;
     QLabel* playHint_ = nullptr;     // "Остановите ■, чтобы править"
+    InlineBanner* banner_ = nullptr; // why something does not work, and the fix
+    bool stickyBanner_ = false;      // a message about the whole scene (a restart needed): kept until ▶
     QLabel* headerIcon_ = nullptr;
     QLabel* headerName_ = nullptr;
     QWidget* headerChips_ = nullptr; // small role icons next to the name
     RoleBar* roleBar_ = nullptr;
     ObjectInspector* object_ = nullptr;
     QComboBox* shape_ = nullptr;
+    QLabel* modelFile_ = nullptr;
     Vec3Row* size_ = nullptr;
-    CollapsibleSection* sections_[int(RoleIcon::Count)] = {};
+    ComponentCard* cards_[int(RoleIcon::Count)] = {};
+    QPushButton* addComponent_ = nullptr;
+    QMenu* addMenu_ = nullptr;
+    InlineBanner* noCollider_ = nullptr; // in the rigid card: a body without a collider falls through
+    ColliderPanel* collider_ = nullptr;
     QDoubleSpinBox *rigidDensity_ = nullptr, *friction_ = nullptr, *restitution_ = nullptr;
     QCheckBox* fixed_ = nullptr;
     Vec3Row *velocity_ = nullptr, *spin_ = nullptr;
