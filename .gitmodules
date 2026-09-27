@@ -1,0 +1,3 @@
+[submodule "extern/phys_realflow"]
+	path = extern/phys_realflow
+	url = https://github.com/werasaimon/phys_realflow.git

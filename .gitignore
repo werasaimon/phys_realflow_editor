@@ -1,0 +1,7 @@
+build/
+build-*/
+*.user
+.vs/
+.vscode/
+*.png
+*.csv
