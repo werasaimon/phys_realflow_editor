@@ -16,13 +16,12 @@
 #include <QPushButton>
 #include <QShortcut>
 #include <QSignalBlocker>
+#include <QStandardItemModel>
 #include <QTreeWidget>
 
 using namespace rf;
 
 namespace {
-
-const char* kShapeNames[] = {"Куб", "Сфера", "Цилиндр", "Конус", "Плоскость"};
 
 // What the thing is, in words, for the scene list: "Куб 1 — твёрдое, магнит".
 QString rolesText(const Entity& e) {
@@ -47,11 +46,11 @@ QVBoxLayout* column(QWidget* w, int margin) {
 // Actions: the big "create" buttons and undo / redo
 // ---------------------------------------------------------------------------
 void SceneBuilder::buildActions() {
-    const char* tips[] = {"Куб 20 см: появится над полом и упадёт", "Шар", "Цилиндр", "Конус",
-                          "Плоскость 3 × 3 м: пол, стол, наклонная плоскость — или ткань"};
+    const char* tips[] = {"Куб 20 см на полу: только форма, роль — плитками справа", "Шар 20 см на полу", "Цилиндр на полу",
+                          "Конус на полу", "Плоскость 3 × 3 м: пол, стол, наклонная плоскость — или ткань"};
     for (int k = 0; k < 5; ++k) {
         const ShapeKind shape = ShapeKind(k);
-        auto* a = new QAction(shapeIcon(shape, 48), kShapeNames[k], this);
+        auto* a = new QAction(shapeIcon(shape, 48), shapeName(shape), this);
         a->setToolTip(tips[k]);
         connect(a, &QAction::triggered, this, [this, shape] { addEntity(shape); });
         createActions_.push_back(a);
@@ -62,6 +61,9 @@ void SceneBuilder::buildActions() {
     redoAct_->setShortcuts({QKeySequence("Ctrl+Shift+Z"), QKeySequence("Ctrl+Y")});
     connect(undoAct_, &QAction::triggered, this, &SceneBuilder::undo);
     connect(redoAct_, &QAction::triggered, this, &SceneBuilder::redo);
+    deselectAct_ = new QAction("Снять выделение", this);
+    deselectAct_->setShortcut(Qt::Key_Escape);
+    connect(deselectAct_, &QAction::triggered, this, [this] { setSelected(0); });
 }
 
 // ---------------------------------------------------------------------------
@@ -127,6 +129,11 @@ void SceneBuilder::buildInspector() {
     inspectorPanel_ = new QWidget;
     inspectorPanel_->setObjectName("builderPanel");
     auto* col = column(inspectorPanel_, 8);
+    playHint_ = new QLabel;
+    playHint_->setObjectName("emptyHint");
+    playHint_->setWordWrap(true);
+    playHint_->setVisible(false);
+    col->addWidget(playHint_);
     emptyHint_ = new QLabel("Выберите объект в сцене\nили создайте новый кнопкой сверху.");
     emptyHint_->setAlignment(Qt::AlignCenter);
     emptyHint_->setObjectName("emptyHint");
@@ -173,7 +180,7 @@ void SceneBuilder::buildShapeBlock(QVBoxLayout* col) {
     f->setSpacing(6);
     shape_ = new QComboBox;
     shape_->setIconSize(QSize(20, 20));
-    for (int k = 0; k < 5; ++k) shape_->addItem(shapeIcon(ShapeKind(k), 20), kShapeNames[k]);
+    for (int k = 0; k < 6; ++k) shape_->addItem(shapeIcon(ShapeKind(k), 20), shapeName(ShapeKind(k)));
     connect(shape_, &QComboBox::currentIndexChanged, this, &SceneBuilder::onDetailsEdited);
     f->addRow("Что", shape_);
     size_ = vectorField(f, "Размер, м", 0.005, 20, 0.05, 2);
@@ -264,6 +271,9 @@ void SceneBuilder::fillInspector() {
     {
         const QSignalBlocker quiet(shape_);
         shape_->setCurrentIndex(int(e->shape));
+        // "Модель" needs a file: offered only to an imported model (button "Модель" on the toolbar).
+        if (auto* model = qobject_cast<QStandardItemModel*>(shape_->model()))
+            model->item(int(ShapeKind::Mesh))->setEnabled(e->shape == ShapeKind::Mesh);
     }
     size_->setValue(e->size);
     fillDetails(*e);
@@ -320,6 +330,13 @@ void SceneBuilder::readDetails(Entity& e) const {
     e.emitter.velocity = emitVelocity_->value();
     e.heat.temperature = float(heatTemperature_->value());
     e.heat.smoke = float(heatSmoke_->value());
+}
+
+void SceneBuilder::showTransform(const Entity& e) {
+    filling_ = true;
+    object_->setObject(e);
+    size_->setValue(e.size);
+    filling_ = false;
 }
 
 void SceneBuilder::fillWorld() {

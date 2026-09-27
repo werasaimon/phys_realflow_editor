@@ -36,6 +36,8 @@ qt_add_executable(realflow WIN32
   src/ViewportTools.h   src/ViewportTools.cpp
   src/FluidSurfaceRenderer.h src/FluidSurfaceRenderer.cpp
   src/PlotPanel.h       src/PlotPanel.cpp
+  src/Gizmo.h           src/Gizmo.cpp
+  src/EditView.h        src/EditView.cpp
   src/SceneBuilder.h    src/SceneBuilder.cpp  src/SceneBuilderPanels.cpp
   src/ObjectInspector.h src/ObjectInspector.cpp
   src/InspectorWidgets.h src/InspectorWidgets.cpp

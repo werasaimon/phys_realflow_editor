@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 
 #include "ParamForm.h"
+#include "RoleBar.h"
 #include "PlotPanel.h"
 #include "SceneBuilder.h"
 #include "Viewport.h"
@@ -102,12 +103,14 @@ MainWindow::MainWindow() {
     connectSceneBuilder();
     buildLayoutActions();
     buildMainToolbar();
+    buildToolShelf();
     buildSceneMenu();
     setExpertMode(false);   // a beginner's screen: the builder and a big 3D view
     setGraphsVisible(false);
 
     status_ = new QLabel;
     statusBar()->addPermanentWidget(status_, 1);
+    onModeChanged();
 
     timer_ = new QTimer(this);
     connect(timer_, &QTimer::timeout, this, &MainWindow::poll);
@@ -124,19 +127,23 @@ MainWindow::~MainWindow() {
 // Toolbar & menu
 // ---------------------------------------------------------------------------
 void MainWindow::buildActions() {
+    // Edit -> play -> stop, as in a game engine: the builder's scene is only simulated while it plays.
     playAct_ = new QAction(controlIcon(ControlIcon::Play, 48), "Пуск", this);
     playAct_->setShortcut(Qt::Key_Space);
-    playAct_->setCheckable(true);
+    playAct_->setToolTip("Пуск (пробел): физика оживает — сцена строится из того, что нарисовано");
     connect(playAct_, &QAction::triggered, this, &MainWindow::togglePlay);
+    pauseAct_ = new QAction(controlIcon(ControlIcon::Pause, 48), "Пауза", this);
+    pauseAct_->setToolTip("Пауза (пробел)");
+    connect(pauseAct_, &QAction::triggered, this, [this] { builder_->pause(); });
+    stopAct_ = new QAction(controlIcon(ControlIcon::Stop, 48), "Стоп", this);
+    stopAct_->setShortcut(QKeySequence("Shift+Space"));
+    stopAct_->setToolTip("Стоп (Shift+пробел): назад к правке — сцена такая, какой её нарисовали");
+    connect(stopAct_, &QAction::triggered, this, [this] { builder_->stop(); });
 
     stepAct_ = new QAction(controlIcon(ControlIcon::Step, 48), "Шаг", this);
     stepAct_->setShortcut(Qt::Key_S);
-    connect(stepAct_, &QAction::triggered, this, [this] { ctrl_->requestStep(); });
-
-    resetAct_ = new QAction(controlIcon(ControlIcon::Reset, 48), "Сначала", this);
-    resetAct_->setShortcut(Qt::Key_R);
-    resetAct_->setToolTip("Вернуть сцену к началу (R)");
-    connect(resetAct_, &QAction::triggered, this, [this] { ctrl_->post([](Simulation& s) { s.reset(); }); });
+    stepAct_->setToolTip("Один кадр (S)");
+    connect(stepAct_, &QAction::triggered, this, [this] { builder_->step(); });
 
     auto* importAct = new QAction(style()->standardIcon(QStyle::SP_DialogOpenButton), "Импорт модели…", this);
     importAct->setShortcut(QKeySequence("Ctrl+I")); // Ctrl+O opens a scene (menu "Сцена")
@@ -163,9 +170,7 @@ void MainWindow::buildActions() {
     file->addAction("Выход", QKeySequence::Quit, this, &QWidget::close);
 
     auto* sim = menuBar()->addMenu("&Симуляция");
-    sim->addAction(playAct_);
-    sim->addAction(stepAct_);
-    sim->addAction(resetAct_);
+    for (QAction* a : {playAct_, pauseAct_, stopAct_, stepAct_}) sim->addAction(a);
     auto* rt = sim->addAction("Не быстрее реального времени");
     rt->setCheckable(true);
     rt->setChecked(true);
@@ -198,7 +203,11 @@ void MainWindow::buildSamplesMenu() {
         a->setCheckable(true);
         samplesGroup_->addAction(a);
         const int p = int(e.id);
-        connect(a, &QAction::triggered, this, [this, p] { ctrl_->post([p](Simulation& s) { loadSample(s, p); }); });
+        connect(a, &QAction::triggered, this, [this, p] {
+            builder_->showSample(); // the builder steps aside while a ready-made scene runs
+            ctrl_->post([p](Simulation& s) { loadSample(s, p); });
+            ctrl_->setRunning(true);
+        });
     }
 }
 
@@ -230,11 +239,129 @@ void MainWindow::setGraphsVisible(bool on) {
 }
 
 void MainWindow::togglePlay() {
-    bool on = !ctrl_->isRunning();
-    ctrl_->setRunning(on);
-    playAct_->setChecked(on);
-    playAct_->setText(on ? "Пауза" : "Пуск");
-    playAct_->setIcon(controlIcon(on ? ControlIcon::Pause : ControlIcon::Play, 48));
+    if (builder_->mode() == SceneBuilder::Mode::Playing) builder_->pause();
+    else builder_->play();
+}
+
+QString MainWindow::modeText() const {
+    if (builder_->editing()) return "Правка — физика стоит. ▶ Пуск (пробел) оживит сцену";
+    return builder_->mode() == SceneBuilder::Mode::Playing ? "Симуляция идёт — роли меняются на лету" : "Пауза";
+}
+
+// Edit mode and pause share the viewport's edit tools (select, gizmo); on pause they work on the
+// simulation as it stands, and a drag reaches it on release.
+void MainWindow::onModeChanged() {
+    const bool edit = builder_->editing(), gizmo = builder_->gizmoAllowed();
+    const SceneBuilder::Mode m = builder_->mode();
+    view_->setEditMode(gizmo);
+    view_->setAuthoringScene(!builder_->showsSample());
+    view_->setEditCaption(edit ? "Правка: физика стоит. Двигайте, вращайте, масштабируйте; ▶ Пуск оживит сцену."
+                               : "Пауза: гизмо двигает объект там, где он сейчас; роли меняются на лету. ■ Стоп — к исходной сцене.");
+    playAct_->setEnabled(m != SceneBuilder::Mode::Playing);
+    pauseAct_->setEnabled(m == SceneBuilder::Mode::Playing);
+    stopAct_->setEnabled(!edit);
+    for (QAction* a : toolGroup_->actions()) a->setEnabled(gizmo);
+    localAct_->setEnabled(gizmo);
+    status_->setText(modeText());
+}
+
+// The right click of the edit mode, as the quad menu of 3ds Max: an object under the cursor that is
+// not selected is selected first (the same click rules), then the menu opens at the cursor.
+void MainWindow::showEditContextMenu(const QPointF& pos) {
+    const uint32_t under = view_->pickEntity(view_->camera().screenRay(pos, view_->size()));
+    if (under && under != builder_->selectedId()) view_->clickSelect(pos, false);
+    QMenu* menu = buildEditContextMenu();
+    menu->exec(view_->mapToGlobal(pos.toPoint()));
+    menu->deleteLater();
+}
+
+QMenu* MainWindow::buildEditContextMenu() {
+    auto* menu = new QMenu(this);
+    for (QAction* a : toolGroup_->actions()) menu->addAction(a); // the toolbar's own actions: one state
+    menu->addSection("Система координат");
+    auto* space = new QActionGroup(menu);
+    const struct { const char* text; bool local; } spaces[] = {{"Мировая (World)", false}, {"Локальная (Local)", true}};
+    for (const auto& s : spaces) {
+        QAction* a = menu->addAction(s.text);
+        a->setCheckable(true);
+        a->setChecked(localAct_->isChecked() == s.local);
+        a->setShortcut(Qt::Key_X);
+        space->addAction(a);
+        const bool local = s.local;
+        connect(a, &QAction::triggered, this, [this, local] { localAct_->setChecked(local); });
+    }
+    if (builder_->selectedId()) addObjectActions(menu);
+    return menu;
+}
+
+void MainWindow::addObjectActions(QMenu* menu) {
+    const uint32_t id = builder_->selectedId();
+    const rf::Entity* e = nullptr;
+    for (const rf::Entity& x : builder_->graph().entities)
+        if (x.id == id) e = &x;
+    if (!e) return;
+    menu->addSection(QString::fromStdString(e->name));
+    menu->addAction("Показать", QKeySequence(Qt::Key_F), this, [this] { builder_->frameSelected(); });
+    menu->addAction("Дублировать", this, [this] { builder_->duplicateSelected(); });
+    menu->addAction("Удалить", QKeySequence::Delete, this, [this] { builder_->removeSelected(); });
+    menu->addAction(e->visible ? "Скрыть" : "Показать объект", this, [this, id] { builder_->toggleVisible(id); });
+    menu->addAction(e->locked ? "Разблокировать" : "Заблокировать", this, [this, id] { builder_->toggleLocked(id); });
+    QMenu* roles = menu->addMenu(roleIcon(RoleIcon::Rigid, 20), "Роль");
+    for (int k = 0; k < int(RoleIcon::Count); ++k) {
+        const RoleIcon role = RoleIcon(k);
+        if (k == 4) roles->addSeparator(); // made of | also does
+        QAction* a = roles->addAction(roleIcon(role, 20), roleName(role), this, [this, role] { builder_->toggleRole(role); });
+        a->setCheckable(true);
+        a->setChecked(roleEnabled(*e, role));
+        a->setEnabled(!(role == RoleIcon::Cloth && e->shape == rf::ShapeKind::Mesh));
+    }
+}
+
+void MainWindow::setTool(GizmoMode m) {
+    view_->gizmo().setMode(m);
+    view_->gizmo().setHover(GizmoHandle::None);
+    view_->update();
+}
+
+// The tool shelf at the left edge of the 3D view, as in Blender: select, move, rotate, scale, and
+// whether the gizmo's axes are the world's or the object's own.
+void MainWindow::buildToolShelf() {
+    auto* tb = new QToolBar("Инструменты", this);
+    tb->setObjectName("toolShelf");
+    tb->setMovable(false);
+    tb->setIconSize(QSize(28, 28));
+    tb->setToolButtonStyle(Qt::ToolButtonIconOnly);
+    addToolBar(Qt::LeftToolBarArea, tb);
+    toolGroup_ = new QActionGroup(this);
+    struct Tool { GizmoMode mode; ControlIcon icon; const char* name; const char* id; const char* key; const char* tip; };
+    const Tool tools[] = {
+        {GizmoMode::Select, ControlIcon::ToolSelect, "Выбор", "toolSelect", "Q", "Выбор (Q): щелчок выбирает, ещё щелчок туда же — то, что позади"},
+        {GizmoMode::Translate, ControlIcon::ToolMove, "Перемещение", "toolMove", "W", "Перемещение (W): стрелки — по оси, квадраты — в плоскости, центр — свободно; Ctrl — шаг 0,1 м"},
+        {GizmoMode::Rotate, ControlIcon::ToolRotate, "Вращение", "toolRotate", "E", "Вращение (E): кольца — вокруг оси, внешнее — вокруг взгляда; Ctrl — шаг 15°"},
+        {GizmoMode::Scale, ControlIcon::ToolScale, "Масштаб", "toolScale", "R", "Масштаб (R): кубики — по оси, центр — целиком; Ctrl — шаг 10 %"}};
+    for (const Tool& t : tools) {
+        QAction* a = tb->addAction(controlIcon(t.icon, 28), t.name);
+        a->setObjectName(t.id);
+        a->setCheckable(true);
+        a->setShortcut(QKeySequence(t.key));
+        a->setToolTip(t.tip);
+        a->setChecked(t.mode == GizmoMode::Translate);
+        toolGroup_->addAction(a);
+        const GizmoMode m = t.mode;
+        connect(a, &QAction::triggered, this, [this, m] { setTool(m); });
+    }
+    tb->addSeparator();
+    localAct_ = tb->addAction("Мир");
+    localAct_->setObjectName("toolLocal");
+    localAct_->setCheckable(true);
+    localAct_->setShortcut(Qt::Key_X);
+    localAct_->setToolTip("Оси гизмо (X): «Мир» — оси сцены, «Свои» — оси самого объекта");
+    connect(localAct_, &QAction::toggled, this, [this](bool on) {
+        view_->gizmo().setLocal(on);
+        localAct_->setText(on ? "Свои" : "Мир");
+        view_->update();
+    });
+    setTool(GizmoMode::Translate);
 }
 
 // ---------------------------------------------------------------------------
@@ -723,19 +850,39 @@ void MainWindow::buildSceneBuilderDock() {
 
 void MainWindow::connectSceneBuilder() {
     connect(builder_, &SceneBuilder::statusMessage, this, [this](const QString& text) { statusBar()->showMessage(text, 6000); });
-    connect(builder_, &SceneBuilder::wantsRunning, this, [this] {
-        if (!ctrl_->isRunning()) togglePlay();
+    connect(builder_, &SceneBuilder::modeChanged, this, &MainWindow::onModeChanged);
+    connect(builder_, &SceneBuilder::editSnapshot, this, [this](std::shared_ptr<const rf::RenderSnapshot> s) {
+        if (builder_->editing()) view_->setSnapshot(std::move(s));
     });
     connect(builder_, &SceneBuilder::highlightBodies, view_, &Viewport::setHighlightBodies);
+    connect(builder_, &SceneBuilder::hoverBodies, view_, &Viewport::setHoverBodies);
+    connect(builder_, &SceneBuilder::ghostBodies, view_, &Viewport::setGhostBodies);
+    connect(builder_, &SceneBuilder::unpickableBodies, view_, &Viewport::setUnpickableBodies);
+    connect(builder_, &SceneBuilder::gizmoTarget, view_, &Viewport::setGizmoTarget);
+    connect(builder_, &SceneBuilder::sceneryBodies, view_, &Viewport::setSceneryBodies);
     connect(builder_, &SceneBuilder::frameRequested, this, [this](const rf::AABB& box) {
         view_->setFocusBox(box);
         view_->frameScene();
     });
-    connect(builder_, &SceneBuilder::unpickableBodies, view_, &Viewport::setUnpickableBodies);
     connect(view_, &Viewport::bodyClicked, builder_, &SceneBuilder::selectBody);
-    connect(view_, &Viewport::moveStarted, builder_, &SceneBuilder::moveStarted);
-    connect(view_, &Viewport::moveDragged, builder_, &SceneBuilder::moveDragged);
-    connect(view_, &Viewport::moveFinished, builder_, &SceneBuilder::moveFinished);
+    connect(view_, &Viewport::entityClicked, builder_, &SceneBuilder::onEntityClicked);
+    connect(view_, &Viewport::entityHovered, builder_, &SceneBuilder::onEntityHovered);
+    connect(view_, &Viewport::gizmoStarted, builder_, &SceneBuilder::onGizmoStarted);
+    connect(view_, &Viewport::gizmoMoved, builder_, &SceneBuilder::onGizmoMoved);
+    connect(view_, &Viewport::gizmoFinished, builder_, &SceneBuilder::onGizmoFinished);
+    connect(view_, &Viewport::gizmoCancelled, builder_, &SceneBuilder::onGizmoCancelled);
+    connect(view_, &Viewport::editContextMenu, this, &MainWindow::showEditContextMenu);
+    // What the mouse ray hits: the authored shapes in edit mode, the simulated bodies on pause.
+    view_->setEditPicker([this](const Ray& ray) {
+        if (builder_->editing()) return builder_->pickAll(ray);
+        std::vector<PickHit> hits;
+        int body;
+        rf::Vector3 hit;
+        if (view_->pickAnyBody(ray, body, hit) && builder_->entityOfBody(body))
+            hits.push_back({builder_->entityOfBody(body), rf::length(hit - ray.origin), hit, ""});
+        return hits;
+    });
+    addAction(builder_->deselectAction()); // Esc works wherever the focus is in the window
 }
 
 // The big bar on top: what you can create, then run / step / back to the start, then undo / redo,
@@ -748,10 +895,11 @@ void MainWindow::buildMainToolbar() {
     tb->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
     addToolBar(Qt::TopToolBarArea, tb);
     for (QAction* a : builder_->createActions()) tb->addAction(a);
+    auto* modelAct = tb->addAction(shapeIcon(rf::ShapeKind::Mesh, 48), "Модель");
+    modelAct->setToolTip("Модель из файла OBJ / STL: только форма, роль — плитками справа");
+    connect(modelAct, &QAction::triggered, this, &MainWindow::importModel);
     tb->addSeparator();
-    tb->addAction(playAct_);
-    tb->addAction(stepAct_);
-    tb->addAction(resetAct_);
+    for (QAction* a : {playAct_, pauseAct_, stopAct_, stepAct_}) tb->addAction(a);
     tb->addSeparator();
     tb->addAction(builder_->undoAction());
     tb->addAction(builder_->redoAction());
@@ -1054,7 +1202,7 @@ void MainWindow::updateInfo(const Snap& s) {
                          .arg(QString::fromStdString(s.sceneName))
                          .arg(s.frame)
                          .arg(s.time, 0, 'f', 3)
-                         .arg(ctrl_->isRunning() ? "идёт расчёт" : "пауза", readings));
+                         .arg(modeText(), readings));
     updateSensors(s);
 }
 
@@ -1075,6 +1223,8 @@ void MainWindow::updateSensors(const Snap& s) {
 }
 
 void MainWindow::onSnapshot(const std::shared_ptr<const Snap>& s) {
+    if (builder_->editing()) return; // edit mode shows the authored scene (SceneBuilder::editSnapshot), not the simulation
+    builder_->onSimulationSnapshot(*s);
     // A ready-made scene is framed whole again; the builder's scenes frame their objects.
     if (s->sceneName != lastSceneName_ && s->sceneName.rfind(SceneBuilder::sceneName(), 0) != 0) view_->setFocusBox(rf::AABB());
     view_->setSnapshot(s);
@@ -1117,10 +1267,13 @@ void MainWindow::onSnapshot(const std::shared_ptr<const Snap>& s) {
 void MainWindow::runAutomation(int preset, int frames, const QString& shot, const QString& csv) {
     preset = std::clamp(preset, -1, int(samples().size()) - 1);
     if (preset < 0) startBuilder();
-    else ctrl_->post([preset](Simulation& s) { loadSample(s, preset); });
+    else {
+        builder_->showSample();
+        ctrl_->post([preset](Simulation& s) { loadSample(s, preset); });
+    }
     auto_.active = !shot.isEmpty() || !csv.isEmpty();
     if (!auto_.active) {
-        if (!ctrl_->isRunning()) togglePlay(); // opened from the command line: start simulating
+        ctrl_->setRunning(preset >= 0); // a ready-made scene from the command line runs at once
         return;
     }
     auto_.preset = preset;
@@ -1128,7 +1281,15 @@ void MainWindow::runAutomation(int preset, int frames, const QString& shot, cons
     auto_.shot = shot;
     auto_.csv = csv;
     ctrl_->setRealtimeLimit(false);
-    ctrl_->setRunning(true);
+    if (preset < 0 && auto_.editOnly) { // the authored scene as it is: no simulation
+        QTimer::singleShot(900, this, [this] {
+            (auto_.wholeWindow ? grab().toImage() : view_->grabFramebuffer()).save(auto_.shot);
+            qApp->quit();
+        });
+        return;
+    }
+    if (preset < 0) builder_->play();
+    else ctrl_->setRunning(true);
 }
 
 // ---------------------------------------------------------------------------
@@ -1147,6 +1308,13 @@ void MainWindow::importMesh() {
             if (self) QMessageBox::warning(self, "Импорт модели", "Не удалось загрузить модель:\n" + msg);
         }, Qt::QueuedConnection);
     });
+}
+
+void MainWindow::importModel() {
+    const QString path = QFileDialog::getOpenFileName(this, "Модель как форма", examplesDir() + "/models", "3D-модели (*.obj *.stl)");
+    if (path.isEmpty()) return;
+    QString error;
+    if (!builder_->importModel(path, error)) QMessageBox::warning(this, "Модель", "Не удалось загрузить модель:\n" + error);
 }
 
 void MainWindow::exportSurfaceLoads() {

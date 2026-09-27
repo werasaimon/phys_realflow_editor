@@ -4,12 +4,15 @@
 // Needs only OpenGL 3.0 (GLSL 1.30): runs on any GPU of the last ~15 years and on the CPU through
 // Mesa llvmpipe (--software-gl). A 3.3 core context is used when the driver offers one.
 
+#include "EditView.h"
 #include "FluidSurfaceRenderer.h"
+#include "Gizmo.h"
 #include "OrbitCamera.h"
 #include "ViewportTools.h"
 #include "scene/Simulation.h"
 
 #include <QColor>
+#include <QElapsedTimer>
 #include <QMatrix4x4>
 #include <QOpenGLBuffer>
 #include <QOpenGLExtraFunctions>
@@ -18,6 +21,7 @@
 #include <QOpenGLWidget>
 #include <QVector3D>
 
+#include <functional>
 #include <map>
 #include <memory>
 #include <string>
@@ -31,6 +35,7 @@ public:
     ~Viewport() override;
 
     void setSnapshot(std::shared_ptr<const rf::RenderSnapshot> s);
+    const std::shared_ptr<const rf::RenderSnapshot>& snapshot() const { return snap_; }
     void setColormap(int c) { colormap_ = c; update(); }
     void setShowDomain(bool on) { showDomain_ = on; update(); }
     void setShowFloor(bool on) { showFloor_ = on; update(); }
@@ -58,11 +63,43 @@ public:
     // Any body under the cursor, static ones too (the scene builder selects walls and floors).
     bool pickAnyBody(const Ray& ray, int& body, rf::Vector3& hit) const;
     // The scene builder's feedback: the bodies of the selected thing get an outline; locked ones
-    // are invisible to the mouse (it passes through them to what is behind).
+    // are invisible to the mouse (it passes through them to what is behind). In edit mode the body
+    // under the mouse gets a lighter outline and geometry without a role a faint one.
     void setHighlightBodies(const std::vector<int>& bodies) { highlight_ = bodies; update(); }
+    void setHoverBodies(const std::vector<int>& bodies) { hoverBodies_ = bodies; update(); }
+    // Scenery drawn next to the simulation's bodies: geometry without a role takes no part in the
+    // simulation but stays in the picture while the scene plays.
+    void setSceneryBodies(std::vector<rf::RenderSnapshot::Body> bodies) { scenery_ = std::move(bodies); update(); }
+    // The scene builder's own scene (not a ready-made sample): the world box is only a faint floor
+    // outline, and the solver's markers (the gas's heat source) are not drawn - its objects show that.
+    void setAuthoringScene(bool on) { authoring_ = on; update(); }
+    void setGhostBodies(const std::vector<int>& bodies) { ghostBodies_ = bodies; update(); }
     void setUnpickableBodies(const std::vector<char>& flags) { unpickable_ = flags; }
     bool unpickable(int body) const { return body >= 0 && body < int(unpickable_.size()) && unpickable_[size_t(body)]; }
     void showProbe(const Ray& ray, const rf::Vector3& hit);
+
+    // Edit mode: the scene as authored, nothing simulated. The mouse selects objects through the
+    // picker the scene builder gives (every object on a ray, nearest first) and drags the gizmo.
+    void setEditMode(bool on);
+    bool editMode() const { return editMode_; }
+    void setEditCaption(const QString& text) { editCaption_ = text; update(); } // the line under the title
+    void setEditPicker(std::function<std::vector<PickHit>(const Ray&)> picker) { picker_ = std::move(picker); }
+    std::vector<PickHit> pickAll(const Ray& ray) const { return picker_ ? picker_(ray) : std::vector<PickHit>(); }
+    uint32_t pickEntity(const Ray& ray, rf::Vector3* hit = nullptr) const;
+    // A click: the nearest object under the cursor; a second click on the same spot (or Alt+click)
+    // takes the next one behind it along the ray, and so on round. Emits entityClicked.
+    uint32_t clickSelect(const QPointF& pos, bool next);
+    void setHoveredEntity(uint32_t id);
+    Gizmo& gizmo() { return gizmo_; }
+    GizmoView gizmoView() const { return GizmoView{camera_, size()}; }
+    // What the gizmo sits on: the selected object (visible = there is one that may be edited).
+    void setGizmoTarget(bool visible, const rf::Vector3& position, const rf::Quaternion& rotation);
+    bool gizmoShown() const { return editMode_ && gizmoVisible_ && gizmo_.mode() != GizmoMode::Select; }
+    // Keyboard transforms (G, Shift+R, Shift+S): see Gizmo.h.
+    void startModal(GizmoMode m);
+    void finishModal();
+    void cancelModal();
+    void cancelGizmoDrag(); // Esc or the right button during a handle drag: the object goes back
     void setBrushRadius(float r) { brushRadius_ = r; }
 
 signals:
@@ -73,9 +110,13 @@ signals:
     void grabMoved(rf::Vector3 target);
     void grabReleased();
     void bodyClicked(int body);                       // left click on any body: select it
-    void moveStarted(int body, rf::Vector3 hit);      // Shift + left drag: move the body's thing
-    void moveDragged(rf::Vector3 point);              // the cursor on the horizontal plane of the hit
-    void moveFinished();
+    void entityClicked(uint32_t id);                  // edit mode: a click selected this object (0: empty space)
+    void entityHovered(uint32_t id);                  // edit mode: the object under the mouse changed
+    void gizmoStarted();                              // a handle, a Shift+drag or a keyboard transform began
+    void gizmoMoved(const GizmoPose& pose);           // where it has taken the object so far
+    void gizmoFinished();                             // confirmed: one step of the undo history
+    void gizmoCancelled();                            // Esc / right button: put the object back
+    void editContextMenu(QPointF pos);                // edit mode: a right click without a drag
     // The GPU / driver cannot do OpenGL 3.0: the window offers a restart in software mode.
     void openGLUnsupported(QString renderer);
 
@@ -89,6 +130,7 @@ protected:
     void wheelEvent(QWheelEvent* e) override;
     void mouseDoubleClickEvent(QMouseEvent* e) override;
     void keyPressEvent(QKeyEvent* e) override;
+    bool event(QEvent* e) override; // a keyboard transform takes the keys its shortcuts would get
 
 private:
     struct Buffer {
@@ -104,6 +146,7 @@ private:
     void drawObstacle(const QMatrix4x4& view, const QMatrix4x4& proj);
     void drawVesselGlass(const QMatrix4x4& view, const QMatrix4x4& proj);
     void drawBodies(const QMatrix4x4& view, const QMatrix4x4& proj);
+    void drawBoxBodies(const QMatrix4x4& view, const QMatrix4x4& proj);
     void drawParticles(const QMatrix4x4& view, const QMatrix4x4& proj);
     void drawCloths(const QMatrix4x4& view, const QMatrix4x4& proj); // cloth sheets + soft body surfaces
     void drawSlice(const QMatrix4x4& vp);
@@ -115,11 +158,20 @@ private:
     void drawProbe(const QMatrix4x4& vp);
     void drawDebugProbe(const QMatrix4x4& vp); // the engine's Probe drawing (lines, points, boxes)
     void drawGrab(const QMatrix4x4& vp);
-    void drawHighlight(const QMatrix4x4& vp); // outline of the scene builder's selection
+    // Silhouette outlines: selection (orange), hover (faint white), geometry without a role (fainter).
+    void drawHighlight(const QMatrix4x4& vp);
+    bool ensureMaskTarget(int w, int h);
+    void buildMaskTriangles();
+    void appendBodyTriangles(const rf::RenderSnapshot::Body& b, std::vector<float>& out) const;
+    void drawGizmo(const QMatrix4x4& vp);
+    void drawEditLabel(class QPainter& p); // the live amount of a drag next to the cursor
+    bool modalKey(QKeyEvent* e);
+    void modalDrag(); // the keyboard changed the transform: recompute it at the cursor
     void drawJoints(const QMatrix4x4& vp);
     ViewportTool& toolFor(Qt::MouseButton button, const QPointF& pos);
     void drawVolume(const QMatrix4x4& vp, const QVector3D& eye);
     void drawOverlay();
+    void drawAxesAndHints(class QPainter& p);
     void drawLegend(class QPainter& p, const QRect& r, float lo, float hi, const QString& label, int map);
     QMatrix4x4 viewMatrix() const { return camera_.view(); }
     QMatrix4x4 projMatrix() const { return camera_.projection(float(width()) / std::max(1, height())); }
@@ -127,7 +179,7 @@ private:
 
     std::shared_ptr<const rf::RenderSnapshot> snap_;
 
-    QOpenGLShaderProgram meshProg_, sphereProg_, lineProg_, sliceProg_, volumeProg_, bgProg_, planetProg_;
+    QOpenGLShaderProgram meshProg_, sphereProg_, lineProg_, sliceProg_, volumeProg_, bgProg_, planetProg_, outlineProg_;
     Buffer bg_, obstacle_, cube_, particles_, lines_, slice_, volumeBox_;
     QOpenGLBuffer obstacleScalar_{QOpenGLBuffer::VertexBuffer};
     std::vector<uint32_t> obstacleVertexMap_; // expanded vertex -> original vertex
@@ -164,7 +216,7 @@ private:
     OrbitTool orbitTool_;
     DisturbTool disturbTool_;
     GrabTool grabTool_;
-    MoveTool moveTool_;
+    EditTool editTool_;
     ViewportTool* grabbed_ = nullptr; // tool that received the press, keeps the drag
     Ray probeRay_;
     rf::Vector3 probeHit_;
@@ -174,6 +226,32 @@ private:
     rf::AABB focusBox_;            // what to frame when valid (the builder's objects)
     std::vector<int> highlight_;   // bodies outlined as selected
     std::vector<char> unpickable_; // per body: the mouse passes through
+    std::vector<int> hoverBodies_, ghostBodies_;
+    std::vector<rf::RenderSnapshot::Body> scenery_;
+    bool authoring_ = false;
+    std::vector<const rf::RenderSnapshot::Body*> drawnBodies_;
+    bool editMode_ = false, gizmoVisible_ = false;
+    Gizmo gizmo_;
+    std::function<std::vector<PickHit>(const Ray&)> picker_;
+    uint32_t hoveredEntity_ = 0;
+    QPointF lastMouse_;
+    QString typed_; // the number typed during a keyboard transform
+    QString editCaption_ = "Правка: физика стоит. Двигайте, вращайте, масштабируйте; ▶ Пуск оживит сцену.";
+    std::vector<GizmoPiece> gizmoPieces_; // reused every frame: drawing the gizmo allocates nothing
+    // The outline mask: an offscreen target the outlined objects are drawn into, and their triangles
+    // in world space (selected, hovered, without a role), rebuilt only when the scene or the lists change.
+    GLuint maskFbo_ = 0, maskTex_ = 0;
+    int maskW_ = 0, maskH_ = 0;
+    std::vector<float> maskTriangles_[3];
+    uint64_t maskSerial_ = ~0ull;
+    std::vector<int> maskLists_[3];
+    std::shared_ptr<const rf::TriMesh> unitSphere_;
+    // Cycling through the objects on one ray: the last click and what it found.
+    QPointF lastClickPos_;
+    QElapsedTimer lastClickTime_;
+    QMatrix4x4 lastClickView_;
+    std::vector<uint32_t> lastClickHits_;
+    int lastClickIndex_ = -1;
     std::string lastSceneName_; // the scene is framed again when another one is loaded
 
     int colormap_ = Turbo;

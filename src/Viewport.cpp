@@ -8,7 +8,10 @@
 #include <QMouseEvent>
 #include <QPainter>
 #include <QPainterPath>
+#include <QCursor>
+#include <QLineF>
 #include <QTimer>
+#include <QToolTip>
 #include <QWheelEvent>
 
 #include <cmath>
@@ -64,6 +67,8 @@ Viewport::~Viewport() {
     if (volumeTex_) glDeleteTextures(1, &volumeTex_);
     if (depthTex_) glDeleteTextures(1, &depthTex_);
     if (depthFbo_) glDeleteFramebuffers(1, &depthFbo_);
+    if (maskTex_) glDeleteTextures(1, &maskTex_);
+    if (maskFbo_) glDeleteFramebuffers(1, &maskFbo_);
     hullCache_.clear(); // GL objects must die while the context is current
     fluidSurface_.release();
     doneCurrent();
@@ -90,6 +95,7 @@ void Viewport::buildShaders() {
     buildProgram(sliceProg_, h + kSliceVS, hc + kSliceFS, "slice", {"aPos", "aUV"});
     buildProgram(volumeProg_, h + kVolVS, h + kVolFS, "volume", {"aPos"});
     buildProgram(planetProg_, h + kPlanetVS, h + kPlanetFS, "planet", {"aPos", "aNormal", "aScalar"});
+    buildProgram(outlineProg_, h + kBgVS, h + kOutlineFS, "outline", {});
 }
 
 void Viewport::initializeGL() {
@@ -113,6 +119,7 @@ void Viewport::initializeGL() {
     if (!core) glEnable(0x8861); // GL_POINT_SPRITE: gl_PointCoord needs it outside core profiles
 
     bg_.vao.create();
+    unitSphere_ = std::make_shared<rf::TriMesh>(rf::primitives::sphere(1.0f, 20, 10)); // outlines of sphere bodies
 
     // Unit cube with face normals (for boxes), positions in [-1, 1].
     {
@@ -240,12 +247,7 @@ void Viewport::frameScene() {
 }
 
 ViewportTool& Viewport::toolFor(Qt::MouseButton button, const QPointF& pos) {
-    // Shift + LMB on a body moves its thing (the scene builder), whatever else the scene does.
-    if (button == Qt::LeftButton && (QGuiApplication::keyboardModifiers() & Qt::ShiftModifier)) {
-        int body;
-        Vector3 hit;
-        if (pickAnyBody(camera_.screenRay(pos, size()), body, hit)) return moveTool_;
-    }
+    if (editMode_) return editTool_; // the scene builder's edit mode: select, gizmo, camera
     // LMB is the disturbance ray wherever there is gas to disturb - unless it hits a rigid body,
     // which it then grabs; the camera lives on the wheel.
     bool gas = snap_ && snap_->mode == rf::SimMode::WindTunnel;
@@ -265,7 +267,7 @@ ViewportTool& Viewport::toolFor(Qt::MouseButton button, const QPointF& pos) {
 }
 
 void Viewport::mousePressEvent(QMouseEvent* e) {
-    if (!grabbed_ && e->button() == Qt::LeftButton && !(e->modifiers() & Qt::ShiftModifier)) {
+    if (!editMode_ && !grabbed_ && e->button() == Qt::LeftButton && !(e->modifiers() & Qt::ShiftModifier)) {
         int body;
         Vector3 hit;
         if (pickAnyBody(camera_.screenRay(e->position(), size()), body, hit)) emit bodyClicked(body);
@@ -275,7 +277,9 @@ void Viewport::mousePressEvent(QMouseEvent* e) {
 }
 
 void Viewport::mouseMoveEvent(QMouseEvent* e) {
+    lastMouse_ = e->position();
     if (grabbed_) grabbed_->move(*this, e);
+    else if (editMode_) editTool_.move(*this, e); // hover, or a keyboard transform following the mouse
 }
 
 void Viewport::mouseReleaseEvent(QMouseEvent* e) {
@@ -291,8 +295,146 @@ void Viewport::wheelEvent(QWheelEvent* e) {
 void Viewport::mouseDoubleClickEvent(QMouseEvent*) { frameScene(); }
 
 void Viewport::keyPressEvent(QKeyEvent* e) {
+    if (gizmo_.modal() && modalKey(e)) return;
+    if (gizmo_.dragging()) { // a handle drag: Esc cancels, other keys wait
+        if (e->key() == Qt::Key_Escape) cancelGizmoDrag();
+        return;
+    }
+    if (editMode_ && !gizmo_.dragging()) { // Blender's keys: G move, Shift+R turn, Shift+S scale
+        const Qt::KeyboardModifiers mods = e->modifiers() & (Qt::ShiftModifier | Qt::ControlModifier | Qt::AltModifier);
+        if (e->key() == Qt::Key_G && mods == Qt::NoModifier) return startModal(GizmoMode::Translate);
+        if (e->key() == Qt::Key_R && mods == Qt::ShiftModifier) return startModal(GizmoMode::Rotate);
+        if (e->key() == Qt::Key_S && mods == Qt::ShiftModifier) return startModal(GizmoMode::Scale);
+    }
     if (e->key() == Qt::Key_F) frameScene();
     else QOpenGLWidget::keyPressEvent(e);
+}
+
+bool Viewport::event(QEvent* e) {
+    if (e->type() == QEvent::ShortcutOverride && gizmo_.dragging()) {
+        e->accept(); // X, Esc, digits... belong to the transform, not to the window's shortcuts
+        return true;
+    }
+    return QOpenGLWidget::event(e);
+}
+
+// ---------------------------------------------------------------------------
+// Edit mode: picking, the gizmo, keyboard transforms
+// ---------------------------------------------------------------------------
+void Viewport::setEditMode(bool on) {
+    if (!on) cancelModal();
+    editMode_ = on;
+    setMouseTracking(on);
+    if (!on) {
+        gizmo_.setHover(GizmoHandle::None);
+        hoveredEntity_ = 0;
+        hoverBodies_.clear();
+        ghostBodies_.clear();
+    }
+    update();
+}
+
+void Viewport::setGizmoTarget(bool visible, const Vector3& position, const rf::Quaternion& rotation) {
+    gizmoVisible_ = visible;
+    gizmo_.setTarget(position, rotation);
+    update();
+}
+
+uint32_t Viewport::pickEntity(const Ray& ray, Vector3* hit) const {
+    const std::vector<PickHit> hits = pickAll(ray);
+    if (hits.empty()) return 0;
+    if (hit) *hit = hits.front().point;
+    return hits.front().id;
+}
+
+void Viewport::setHoveredEntity(uint32_t id) {
+    if (id == hoveredEntity_) return;
+    hoveredEntity_ = id;
+    emit entityHovered(id);
+}
+
+// The objects on the ray, nearest first. Clicking the same spot again within 1.5 s (the camera
+// unmoved) takes the next one; Alt+click always does. A hint at the cursor says "2 / 3: name".
+uint32_t Viewport::clickSelect(const QPointF& pos, bool next) {
+    const std::vector<PickHit> hits = pickAll(camera_.screenRay(pos, size()));
+    std::vector<uint32_t> ids;
+    for (const PickHit& h : hits) ids.push_back(h.id);
+    const bool sameSpot = lastClickTime_.isValid() && lastClickTime_.elapsed() < 1500 && QLineF(pos, lastClickPos_).length() <= 4 &&
+                          camera_.view() == lastClickView_;
+    int i = 0;
+    if (!ids.empty() && ids == lastClickHits_ && lastClickIndex_ >= 0 && (sameSpot || next)) i = (lastClickIndex_ + 1) % int(ids.size());
+    else if (next && ids.size() > 1) i = 1;
+    lastClickPos_ = pos;
+    lastClickTime_.start();
+    lastClickView_ = camera_.view();
+    lastClickHits_ = ids;
+    lastClickIndex_ = ids.empty() ? -1 : i;
+    if (ids.size() > 1)
+        QToolTip::showText(mapToGlobal(pos.toPoint()) + QPoint(16, 8), QString("%1 / %2: %3").arg(i + 1).arg(ids.size()).arg(QString::fromStdString(hits[size_t(i)].name)), this);
+    else
+        QToolTip::hideText();
+    const uint32_t id = ids.empty() ? 0 : ids[size_t(i)];
+    emit entityClicked(id);
+    return id;
+}
+
+void Viewport::startModal(GizmoMode m) {
+    if (!editMode_ || !gizmoVisible_ || gizmo_.dragging()) return;
+    const QPointF p = mapFromGlobal(QCursor::pos());
+    gizmo_.beginModal(m, gizmoView(), rf::Vector2(float(p.x()), float(p.y())));
+    typed_.clear();
+    emit gizmoStarted();
+    update();
+}
+
+void Viewport::finishModal() {
+    if (!gizmo_.modal()) return;
+    gizmo_.end();
+    typed_.clear();
+    emit gizmoFinished();
+    update();
+}
+
+void Viewport::cancelModal() {
+    if (!gizmo_.modal()) return;
+    gizmo_.end();
+    typed_.clear();
+    emit gizmoCancelled();
+    update();
+}
+
+void Viewport::cancelGizmoDrag() {
+    if (!gizmo_.dragging() || gizmo_.modal()) return;
+    gizmo_.end();
+    emit gizmoCancelled();
+    update();
+}
+
+void Viewport::modalDrag() {
+    const QPointF p = mapFromGlobal(QCursor::pos());
+    const bool snap = QGuiApplication::keyboardModifiers() & Qt::ControlModifier;
+    emit gizmoMoved(gizmo_.drag(gizmoView(), rf::Vector2(float(p.x()), float(p.y())), snap));
+    update();
+}
+
+// During a keyboard transform: X / Y / Z limit it to an axis, digits type the amount, Enter
+// confirms, Esc cancels; every other key is swallowed.
+bool Viewport::modalKey(QKeyEvent* e) {
+    const int k = e->key();
+    if (k == Qt::Key_Escape) cancelModal();
+    else if (k == Qt::Key_Return || k == Qt::Key_Enter) finishModal();
+    else if (k == Qt::Key_X || k == Qt::Key_Y || k == Qt::Key_Z) {
+        gizmo_.constrainModal(k - Qt::Key_X, gizmoView());
+        modalDrag();
+    } else if (k == Qt::Key_Backspace || (e->text().size() == 1 && QString("0123456789.,-").contains(e->text()))) {
+        if (k == Qt::Key_Backspace) typed_.chop(1);
+        else typed_ += e->text() == "," ? QString(".") : e->text();
+        bool ok = false;
+        const float value = typed_.toFloat(&ok);
+        gizmo_.setTyped(ok, value);
+        modalDrag();
+    }
+    return true;
 }
 
 bool Viewport::pickPoint(const Ray& ray, Vector3& hit) const {
@@ -397,36 +539,133 @@ bool Viewport::pickAnyBody(const Ray& ray, int& body, Vector3& hit) const {
     return body >= 0;
 }
 
-// The selected thing's bodies, outlined by their oriented bounding boxes (slightly larger, drawn
-// over everything so the selection shows even behind other bodies).
+// The silhouette outlines, as in Blender or Maya: the outlined objects are drawn flat into a mask
+// (selected in red, hovered in green, role-less in blue), then a full-screen pass lights the pixels
+// just outside each mask - 2 px of orange around the selection, a faint white line around the object
+// under the mouse, a fainter one around geometry that has no role yet. Drawn over everything.
 void Viewport::drawHighlight(const QMatrix4x4& vp) {
-    if (!snap_ || highlight_.empty()) return;
-    std::vector<float> d;
-    for (int i : highlight_) {
-        if (i < 0 || i >= int(snap_->bodies.size())) continue;
-        const auto& b = snap_->bodies[size_t(i)];
-        Vector3 lo(-b.radius), hi(b.radius);
-        if (b.shape == rf::ShapeType::Box) {
-            lo = -b.halfExtents;
-            hi = b.halfExtents;
-        } else if (b.mesh && !b.mesh->empty()) {
-            const rf::AABB box = b.mesh->bounds();
-            lo = box.lo;
-            hi = box.hi;
-        }
-        const Vector3 pad = (hi - lo) * 0.04f + Vector3(0.004f);
-        lo -= pad;
-        hi += pad;
-        const rf::Matrix3x3 R = b.rot.toMatrix3x3();
-        Vector3 c[8];
-        for (int k = 0; k < 8; ++k)
-            c[k] = b.pos + R * Vector3(k & 1 ? hi.x : lo.x, k & 2 ? hi.y : lo.y, k & 4 ? hi.z : lo.z);
-        const int edges[12][2] = {{0, 1}, {2, 3}, {4, 5}, {6, 7}, {0, 2}, {1, 3}, {4, 6}, {5, 7}, {0, 4}, {1, 5}, {2, 6}, {3, 7}};
-        for (const auto& e : edges) d.insert(d.end(), {c[e[0]].x, c[e[0]].y, c[e[0]].z, 0, c[e[1]].x, c[e[1]].y, c[e[1]].z, 0});
-    }
+    if (!snap_ || (highlight_.empty() && hoverBodies_.empty() && ghostBodies_.empty())) return;
+    const qreal dpr = devicePixelRatioF();
+    const int w = int(width() * dpr), h = int(height() * dpr);
+    if (!ensureMaskTarget(w, h)) return;
+    buildMaskTriangles();
+    glBindFramebuffer(GL_FRAMEBUFFER, maskFbo_);
+    glViewport(0, 0, w, h);
+    glClearColor(0, 0, 0, 0);
+    glClear(GL_COLOR_BUFFER_BIT);
     glDisable(GL_DEPTH_TEST);
-    drawLines(d, GL_LINES, vp, QVector4D(0.35f, 0.68f, 1.0f, 1.0f), 2);
+    glDisable(GL_BLEND);
+    for (int c = 0; c < 3; ++c) { // each list into its own channel
+        glColorMask(c == 0, c == 1, c == 2, GL_FALSE);
+        drawLines(maskTriangles_[c], GL_TRIANGLES, vp, QVector4D(1, 1, 1, 1), 1);
+    }
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glBindFramebuffer(GL_FRAMEBUFFER, defaultFramebufferObject());
+    glViewport(0, 0, w, h);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    outlineProg_.bind();
+    glActiveTexture(GL_TEXTURE0);
+    glBindTexture(GL_TEXTURE_2D, maskTex_);
+    outlineProg_.setUniformValue("uMask", 0);
+    outlineProg_.setUniformValue("uTexel", QVector2D(1.0f / float(w), 1.0f / float(h)));
+    outlineProg_.setUniformValue("uRadius", float(2.0 * dpr));
+    outlineProg_.setUniformValue("uSelected", QVector4D(1.0f, 0.6f, 0.16f, 1.0f));
+    outlineProg_.setUniformValue("uHover", QVector4D(1.0f, 1.0f, 1.0f, 0.55f));
+    outlineProg_.setUniformValue("uGhost", QVector4D(0.82f, 0.86f, 0.94f, 0.22f));
+    bg_.vao.bind();
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    bg_.vao.release();
+    glDisable(GL_BLEND);
     glEnable(GL_DEPTH_TEST);
+}
+
+bool Viewport::ensureMaskTarget(int w, int h) {
+    if (w <= 0 || h <= 0) return false;
+    if (maskFbo_ && w == maskW_ && h == maskH_) return true;
+    if (!maskTex_) glGenTextures(1, &maskTex_);
+    glBindTexture(GL_TEXTURE_2D, maskTex_);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR); // soft edges: the outline is anti-aliased
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    if (!maskFbo_) glGenFramebuffers(1, &maskFbo_);
+    glBindFramebuffer(GL_FRAMEBUFFER, maskFbo_);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, maskTex_, 0);
+    const bool ok = glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE;
+    glBindFramebuffer(GL_FRAMEBUFFER, defaultFramebufferObject());
+    maskW_ = w;
+    maskH_ = h;
+    return ok;
+}
+
+// The outlined bodies' triangles in world space, rebuilt only when the snapshot or the lists change.
+void Viewport::buildMaskTriangles() {
+    const std::vector<int>* lists[3] = {&highlight_, &hoverBodies_, &ghostBodies_};
+    bool same = maskSerial_ == snapSerial_;
+    for (int c = 0; c < 3; ++c) same = same && maskLists_[c] == *lists[c];
+    if (same) return;
+    maskSerial_ = snapSerial_;
+    for (int c = 0; c < 3; ++c) {
+        maskLists_[c] = *lists[c];
+        maskTriangles_[c].clear();
+        for (int i : *lists[c])
+            if (i >= 0 && i < int(snap_->bodies.size())) appendBodyTriangles(snap_->bodies[size_t(i)], maskTriangles_[c]);
+    }
+}
+
+void Viewport::appendBodyTriangles(const rf::RenderSnapshot::Body& b, std::vector<float>& out) const {
+    const rf::Matrix3x3 R = b.rot.toMatrix3x3();
+    auto put = [&](const Vector3& local) {
+        const Vector3 p = b.pos + R * local;
+        out.insert(out.end(), {p.x, p.y, p.z, 0.0f});
+    };
+    if (b.shape == rf::ShapeType::Box) {
+        const Vector3 h = b.halfExtents;
+        const int quads[6][4] = {{0, 2, 3, 1}, {4, 5, 7, 6}, {0, 1, 5, 4}, {2, 6, 7, 3}, {0, 4, 6, 2}, {1, 3, 7, 5}};
+        auto corner = [&](int k) { return Vector3(k & 1 ? h.x : -h.x, k & 2 ? h.y : -h.y, k & 4 ? h.z : -h.z); };
+        for (const auto& q : quads)
+            for (int t : {0, 1, 2, 0, 2, 3}) put(corner(q[t]));
+        return;
+    }
+    const rf::TriMesh* m = b.mesh ? b.mesh.get() : nullptr;
+    const float scale = b.shape == rf::ShapeType::Sphere ? b.radius : 1.0f;
+    if (b.shape == rf::ShapeType::Sphere) m = unitSphere_.get();
+    if (!m) return;
+    for (const auto& tri : m->triangles)
+        for (int k = 0; k < 3; ++k) put(m->positions[tri[k]] * scale);
+}
+
+// The gizmo: over everything (no depth test), see-through where its pieces say so.
+void Viewport::drawGizmo(const QMatrix4x4& vp) {
+    if (!editMode_ || !gizmoVisible_) return;
+    const int count = gizmo_.pieces(gizmoView(), gizmoPieces_);
+    if (count == 0) return;
+    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    for (int i = 0; i < count; ++i) {
+        const GizmoPiece& piece = gizmoPieces_[size_t(i)];
+        if (!piece.triangles.empty())
+            drawLines(piece.triangles, GL_TRIANGLES, vp, QVector4D(piece.color.x, piece.color.y, piece.color.z, piece.alpha), 1);
+    }
+    glDisable(GL_BLEND);
+    glEnable(GL_DEPTH_TEST);
+}
+
+// The amount of the drag in words next to the cursor ("X +0.35 м"), and the typed number.
+void Viewport::drawEditLabel(QPainter& p) {
+    if (!gizmo_.dragging()) return;
+    QString text = QString::fromStdString(gizmo_.dragLabel());
+    if (!typed_.isEmpty()) text = "= " + typed_ + "   " + text;
+    const QFontMetrics fm(p.font());
+    const QRectF box(lastMouse_ + QPointF(18, -30), QSizeF(fm.horizontalAdvance(text) + 16, fm.height() + 8));
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor(20, 22, 27, 215));
+    p.drawRoundedRect(box, 5, 5);
+    p.setPen(QColor(255, 222, 120));
+    p.drawText(box, Qt::AlignCenter, text);
 }
 
 void Viewport::drawJoints(const QMatrix4x4& vp) {
@@ -746,12 +985,18 @@ void Viewport::drawBodies(const QMatrix4x4& view, const QMatrix4x4& proj) {
     bool anyHull = false;
     auto meshBody = [](const auto& b) { return (b.shape == rf::ShapeType::ConvexHull || b.shape == rf::ShapeType::Compound) && b.mesh; };
     for (const auto& b : snap_->bodies) anyHull |= meshBody(b);
+    anyHull |= !editMode_ && !scenery_.empty();
     if (anyHull) {
         meshProg_.bind();
         meshProg_.setUniformValue("uView", view);
         meshProg_.setUniformValue("uProj", proj);
         meshProg_.setUniformValue("uUseScalar", 0);
-        for (const auto& b : snap_->bodies) {
+        drawnBodies_.clear(); // the simulation's bodies, then the scenery (play only); reused frame to frame
+        for (const auto& b : snap_->bodies) drawnBodies_.push_back(&b);
+        if (!editMode_)
+            for (const auto& b : scenery_) drawnBodies_.push_back(&b);
+        for (const rf::RenderSnapshot::Body* body : drawnBodies_) {
+            const auto& b = *body;
             if (!meshBody(b)) continue;
             rf::Matrix3x3 R = b.rot.toMatrix3x3();
             QMatrix4x4 M(R.m[0][0], R.m[0][1], R.m[0][2], b.pos.x, R.m[1][0], R.m[1][1], R.m[1][2], b.pos.y,
@@ -780,6 +1025,11 @@ void Viewport::drawBodies(const QMatrix4x4& view, const QMatrix4x4& proj) {
             g.vao->release();
         }
     }
+    drawBoxBodies(view, proj);
+}
+
+// Box bodies: one unit cube, scaled and turned per body.
+void Viewport::drawBoxBodies(const QMatrix4x4& view, const QMatrix4x4& proj) {
     bool anyBox = false;
     for (const auto& b : snap_->bodies) anyBox |= b.shape == rf::ShapeType::Box;
     if (anyBox) {
@@ -1121,8 +1371,10 @@ void Viewport::drawVectors(const QMatrix4x4& vp, const QVector3D& eyeQ) {
     lines_.vao.release();
 }
 
+// The gas's heat source as three orange rings - in the ready-made scenes. In the builder's scenes the
+// hot object itself shows where the heat is (its role icon in the list and the inspector).
 void Viewport::drawHeatSource(const QMatrix4x4& vp) {
-    if (snap_->mode != rf::SimMode::WindTunnel || !snap_->heat.enabled) return;
+    if (authoring_ || snap_->mode != rf::SimMode::WindTunnel || !snap_->heat.enabled) return;
     const Vector3 c = snap_->heat.center;
     const float r = snap_->heat.radius;
     std::vector<float> d;
@@ -1185,14 +1437,20 @@ void Viewport::paintGL() {
         glDisable(GL_BLEND);
     }
     if (showDomain_ && d.valid()) {
+        // The world box. In the builder's scenes only its floor rectangle, faint: the camera often
+        // stands inside the box, and its vertical edges would cut across the whole view.
         std::vector<float> b;
         Vector3 lo = d.lo, hi = d.hi;
         Vector3 c[8];
         for (int i = 0; i < 8; ++i) c[i] = Vector3((i & 1) ? hi.x : lo.x, (i & 2) ? hi.y : lo.y, (i & 4) ? hi.z : lo.z);
-        const int edges[12][2] = {{0, 1}, {2, 3}, {4, 5}, {6, 7}, {0, 2}, {1, 3}, {4, 6}, {5, 7}, {0, 4}, {1, 5}, {2, 6}, {3, 7}};
-        for (auto& ed : edges)
-            b.insert(b.end(), {c[ed[0]].x, c[ed[0]].y, c[ed[0]].z, 0, c[ed[1]].x, c[ed[1]].y, c[ed[1]].z, 0});
-        drawLines(b, GL_LINES, vp, QVector4D(0.45f, 0.65f, 0.95f, 1.0f), 1);
+        const int edges[12][2] = {{0, 1}, {4, 5}, {0, 4}, {1, 5}, {2, 3}, {6, 7}, {2, 6}, {3, 7}, {0, 2}, {1, 3}, {4, 6}, {5, 7}};
+        const int count = authoring_ ? 4 : 12; // the first four are the floor's
+        for (int k = 0; k < count; ++k)
+            b.insert(b.end(), {c[edges[k][0]].x, c[edges[k][0]].y, c[edges[k][0]].z, 0, c[edges[k][1]].x, c[edges[k][1]].y, c[edges[k][1]].z, 0});
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        drawLines(b, GL_LINES, vp, authoring_ ? QVector4D(0.62f, 0.72f, 0.9f, 0.3f) : QVector4D(0.45f, 0.65f, 0.95f, 1.0f), 1);
+        glDisable(GL_BLEND);
     }
 
     drawObstacle(view, proj);
@@ -1220,6 +1478,7 @@ void Viewport::paintGL() {
     drawDebugProbe(vp);
     drawGrab(vp);
     drawHighlight(vp);
+    drawGizmo(vp);
 
     // Emitter / heat source markers.
     if (snap_->mode == rf::SimMode::Fluid && snap_->emitter.enabled) {
@@ -1285,11 +1544,14 @@ void Viewport::drawOverlay() {
     p.setFont(f);
     p.setPen(QColor(170, 176, 188));
     const bool cpu = softwareRenderer();
-    p.drawText(14, 42, QString("t = %1 с   ·   расчёт %2 мс/кадр   ·   рендер %3 fps (%4)")
-                           .arg(snap_->time, 0, 'f', 3)
-                           .arg(snap_->stepMs, 0, 'f', 1)
-                           .arg(fps_, 0, 'f', 0)
-                           .arg(cpu ? QString("процессор, llvmpipe") : QString("GPU")));
+    if (editMode_)
+        p.drawText(14, 42, editCaption_);
+    else
+        p.drawText(14, 42, QString("t = %1 с   ·   расчёт %2 мс/кадр   ·   рендер %3 fps (%4)")
+                               .arg(snap_->time, 0, 'f', 3)
+                               .arg(snap_->stepMs, 0, 'f', 1)
+                               .arg(fps_, 0, 'f', 0)
+                               .arg(cpu ? QString("процессор, llvmpipe") : QString("GPU")));
 
     // Legends
     bool mainLegend = !snap_->colorLabel.empty() &&
@@ -1312,7 +1574,13 @@ void Viewport::drawOverlay() {
         drawLegend(p, QRect(x, H - 230, 16, 180), lo, hi, "Cp пов.", CoolWarm);
     }
 
-    // Axis gizmo
+    drawAxesAndHints(p);
+    p.end();
+}
+
+// The small axis cross at the bottom left and the line of mouse hints next to it.
+void Viewport::drawAxesAndHints(QPainter& p) {
+    const int H = height();
     QMatrix4x4 v = viewMatrix();
     QPointF o(52, H - 52);
     const QVector3D axes[3] = {{1, 0, 0}, {0, 1, 0}, {0, 0, 1}};
@@ -1325,12 +1593,16 @@ void Viewport::drawOverlay() {
         p.drawLine(o, e);
         p.drawText(e + QPointF(3, 4), names[i]);
     }
-    if (snap_->mode == rf::SimMode::WindTunnel) {
+    if (editMode_) {
+        p.setPen(QColor(170, 176, 188));
+        p.drawText(90, H - 12, "ЛКМ — выбрать (ещё раз — то, что позади) · W / E / R — двигать / вращать / масштаб · G — за мышью, X Y Z — ось, "
+                               "число — точно · Ctrl — шаг · Shift+ЛКМ — по полу · F — показать");
+        drawEditLabel(p);
+    } else if (snap_->mode == rf::SimMode::WindTunnel) {
         p.setPen(QColor(170, 176, 188));
         p.drawText(14, H - 12, "ЛКМ по телу — схватить, по газу — возмущение  ·  колесо зажато — вращение, Shift+колесо / ПКМ — сдвиг, прокрутка — масштаб  ·  F — показать всё");
     } else {
         p.setPen(QColor(170, 176, 188));
         p.drawText(90, H - 12, "ЛКМ по телу — схватить и тащить, ЛКМ по пустоте / колесо зажато — вращение, Shift+колесо / ПКМ — сдвиг, прокрутка — масштаб");
     }
-    p.end();
 }

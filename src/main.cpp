@@ -124,7 +124,11 @@ int main(int argc, char** argv) {
     QCommandLineOption windowOpt("window", "The screenshot shows the whole window, panels too.");
     QCommandLineOption sceneOpt("scene", "Open a scene file (*.rfscene) in the scene builder.", "file");
     QCommandLineOption selfTestOpt("self-test", "Press the scene builder's buttons, check the results, quit (exit code = failures).");
-    cli.addOptions({presetOpt, framesOpt, shotOpt, csvOpt, sizeOpt, softOpt, iconsOpt, windowOpt, sceneOpt, selfTestOpt});
+    QCommandLineOption shotsOpt("shots", "With --self-test: also save screenshots (gizmo, edit and play) into the directory.", "dir");
+    QCommandLineOption gizmoShotsOpt("gizmo-shots", "Save screenshots of the gizmo (move, rotate, scale) into the directory and quit.", "dir");
+    QCommandLineOption editOpt("edit", "The builder's screenshot in edit mode: the scene as authored, nothing simulated.");
+    cli.addOptions({presetOpt, framesOpt, shotOpt, csvOpt, sizeOpt, softOpt, iconsOpt, windowOpt, sceneOpt, selfTestOpt, shotsOpt,
+                    gizmoShotsOpt, editOpt});
     cli.process(app);
     if (cli.isSet(iconsOpt)) return dumpIcons(cli.value(iconsOpt)) > 0 ? 0 : 1;
 
@@ -132,10 +136,12 @@ int main(int argc, char** argv) {
     QStringList wh = cli.value(sizeOpt).split('x');
     w.resize(wh.value(0).toInt() > 0 ? wh.value(0).toInt() : 1600, wh.value(1).toInt() > 0 ? wh.value(1).toInt() : 950);
     w.show();
-    if (cli.isSet(selfTestOpt)) return runBuilderSelfTest(w);
+    if (cli.isSet(selfTestOpt)) return runBuilderSelfTest(w, cli.value(shotsOpt));
+    if (cli.isSet(gizmoShotsOpt)) return runGizmoShots(w, cli.value(gizmoShotsOpt));
     // Without --preset the editor opens on the scene builder: a floor, ready for the first shape.
     const int preset = cli.isSet(presetOpt) ? cli.value(presetOpt).toInt() : -1;
     w.setScreenshotWholeWindow(cli.isSet(windowOpt));
+    w.setEditScreenshot(cli.isSet(editOpt));
     if (cli.isSet(sceneOpt)) w.setStartScene(cli.value(sceneOpt));
     if (cli.isSet(shotOpt) || cli.isSet(csvOpt))
         w.runAutomation(preset, cli.value(framesOpt).toInt(), cli.value(shotOpt), cli.value(csvOpt));

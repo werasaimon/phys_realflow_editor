@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Gizmo.h"
 #include "SimController.h"
 
 #include <QMainWindow>
@@ -28,12 +29,17 @@ public:
     // Automation: load a preset (-1: the scene builder's new scene), simulate `frames` frames, save
     // a screenshot and/or CSV, quit.
     void runAutomation(int preset, int frames, const QString& screenshotPath, const QString& csvPath);
-    // The first start without a preset: the builder's new scene (a floor), running.
+    // The first start without a preset: the builder's new scene (a floor), in edit mode.
     void startBuilder();
     // The builder starts on this scene file instead of an empty floor (the command line's --scene).
     void setStartScene(const QString& path) { startScene_ = path; }
     // The screenshot of the automation shows the whole window (panels too), not only the 3D view.
     void setScreenshotWholeWindow(bool on) { auto_.wholeWindow = on; }
+    // The screenshot of the builder's scene is taken in edit mode (nothing simulated).
+    void setEditScreenshot(bool on) { auto_.editOnly = on; }
+    // The right-click menu of the edit mode: the tools, the coordinate system, and what can be done
+    // to the selected object. Shares its state with the toolbar and the keys. The caller owns it.
+    class QMenu* buildEditContextMenu();
 
 private:
     // UI construction
@@ -43,7 +49,13 @@ private:
     void buildResultsDock();
     void buildSceneBuilderDock(); // the "Конструктор": shapes with roles, no code (SceneBuilder)
     void connectSceneBuilder();
-    void buildMainToolbar();      // the big "Создать" bar: shapes, run / step / reset, undo / redo, samples
+    void buildMainToolbar();      // the big "Создать" bar: shapes, run / pause / stop / step, undo / redo, samples
+    void buildToolShelf();        // the small bar at the left: select, move, rotate, scale, world / own axes
+    void setTool(GizmoMode m);
+    void onModeChanged();         // edit / playing / paused: the buttons, the viewport, the status line
+    void showEditContextMenu(const QPointF& pos);
+    void addObjectActions(class QMenu* menu);
+    QString modeText() const;
     void buildSamplesMenu();      // the SDK's ready-made scenes, by category
     // A beginner sees the builder and the 3D view; "Эксперт" brings back every solver parameter and
     // the visualisation settings, "Графики" the readings and plots at the bottom.
@@ -71,6 +83,7 @@ private:
 
     // File operations
     void importMesh();
+    void importModel(); // an OBJ / STL model as a new object of the builder
     void exportCsv();
     void exportSurfaceLoads();
     void screenshot();
@@ -89,8 +102,11 @@ private:
     QAction* expertAct_ = nullptr;
     QAction* graphsAct_ = nullptr;
     QAction* playAct_ = nullptr;
+    QAction* pauseAct_ = nullptr;
+    QAction* stopAct_ = nullptr;
     QAction* stepAct_ = nullptr;
-    QAction* resetAct_ = nullptr;
+    QAction* localAct_ = nullptr;
+    class QActionGroup* toolGroup_ = nullptr;
     std::vector<ParamForm*> forms_;
     QGroupBox *objectBox_ = nullptr, *fluidBox_ = nullptr, *gasBox_ = nullptr, *brushBox_ = nullptr,
               *rigidBox_ = nullptr, *fieldBox_ = nullptr, *particleBox_ = nullptr, *sceneBox_ = nullptr;
@@ -116,6 +132,7 @@ private:
         int frames = 0;
         int settle = 0;
         bool wholeWindow = false;
+        bool editOnly = false;
         QString shot, csv;
     } auto_;
 };

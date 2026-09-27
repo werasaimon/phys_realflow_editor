@@ -9,6 +9,7 @@
 #include <QPainterPath>
 #include <QRadialGradient>
 
+#include <cmath>
 #include <functional>
 
 namespace {
@@ -134,6 +135,24 @@ void drawPlane(QPainter& p, const QColor& c) {
     }
 }
 
+// A model from a file: a faceted low-poly gem, each facet in its own shade.
+void drawModel(QPainter& p, const QColor& c) {
+    shadow(p, 50, 90, 36);
+    QPointF ring[6];
+    for (int k = 0; k < 6; ++k) {
+        const qreal a = (90 + 60 * k) * 3.14159265 / 180;
+        ring[k] = QPointF(50 + 38 * std::cos(a), 52 - 38 * std::sin(a));
+    }
+    const QPointF centre(50, 46);
+    const int shades[6] = {140, 120, 95, 70, 80, 110};
+    p.setPen(outline(c));
+    for (int k = 0; k < 6; ++k) {
+        const QPointF tri[] = {centre, ring[k], ring[(k + 1) % 6]};
+        p.setBrush(shade(c, shades[k]));
+        p.drawPolygon(tri, 3);
+    }
+}
+
 QColor shapeColor(rf::ShapeKind k) {
     switch (k) {
     case rf::ShapeKind::Box: return QColor(232, 128, 72);
@@ -141,6 +160,7 @@ QColor shapeColor(rf::ShapeKind k) {
     case rf::ShapeKind::Cylinder: return QColor(110, 196, 98);
     case rf::ShapeKind::Cone: return QColor(236, 196, 80);
     case rf::ShapeKind::Plane: return QColor(160, 166, 176);
+    case rf::ShapeKind::Mesh: return QColor(170, 120, 220);
     }
     return QColor(180, 180, 180);
 }
@@ -343,6 +363,39 @@ void drawLock(QPainter& p, bool closed) {
     p.drawEllipse(QPointF(50, 64), 6, 6);
 }
 
+// The edit tools: a cursor arrow, a cross of four arrows, a turning arrow, a growing square.
+void drawCursor(QPainter& p) {
+    const QPointF arrow[] = {{30, 12}, {30, 80}, {46, 64}, {58, 90}, {70, 84}, {58, 58}, {80, 58}};
+    p.setPen(QPen(QColor(40, 44, 52), 4, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    p.setBrush(kControl);
+    p.drawPolygon(arrow, 7);
+}
+
+void drawMoveCross(QPainter& p) {
+    p.setPen(QPen(kControl, 7, Qt::SolidLine, Qt::RoundCap));
+    p.drawLine(QPointF(50, 20), QPointF(50, 80));
+    p.drawLine(QPointF(20, 50), QPointF(80, 50));
+    p.setPen(Qt::NoPen);
+    p.setBrush(kControl);
+    const QPointF heads[4][3] = {{{50, 6}, {38, 22}, {62, 22}}, {{50, 94}, {38, 78}, {62, 78}},
+                                 {{6, 50}, {22, 38}, {22, 62}}, {{94, 50}, {78, 38}, {78, 62}}};
+    for (const auto& h : heads) p.drawPolygon(h, 3);
+}
+
+void drawScaleSquares(QPainter& p) {
+    p.setBrush(Qt::NoBrush);
+    p.setPen(QPen(kControl, 5, Qt::DashLine, Qt::RoundCap));
+    p.drawRect(QRectF(14, 14, 72, 72));
+    p.setPen(Qt::NoPen);
+    p.setBrush(kControl);
+    p.drawRect(QRectF(14, 54, 32, 32));
+    p.setPen(QPen(kControl, 7, Qt::SolidLine, Qt::RoundCap));
+    p.drawLine(QPointF(52, 48), QPointF(76, 24));
+    p.setPen(Qt::NoPen);
+    const QPointF head[] = {{84, 16}, {80, 38}, {62, 20}};
+    p.drawPolygon(head, 3);
+}
+
 void drawControl(QPainter& p, ControlIcon c) {
     p.setPen(Qt::NoPen);
     switch (c) {
@@ -357,6 +410,14 @@ void drawControl(QPainter& p, ControlIcon c) {
         p.drawRoundedRect(QRectF(24, 18, 18, 64), 4, 4);
         p.drawRoundedRect(QRectF(58, 18, 18, 64), 4, 4);
         break;
+    case ControlIcon::Stop:
+        p.setBrush(QColor(236, 96, 96));
+        p.drawRoundedRect(QRectF(22, 22, 56, 56), 7, 7);
+        break;
+    case ControlIcon::ToolSelect: drawCursor(p); break;
+    case ControlIcon::ToolMove: drawMoveCross(p); break;
+    case ControlIcon::ToolRotate: drawCircleArrow(p); break;
+    case ControlIcon::ToolScale: drawScaleSquares(p); break;
     case ControlIcon::Step: {
         p.setBrush(kControl);
         const QPointF tri[] = {{20, 18}, {66, 50}, {20, 82}};
@@ -398,6 +459,7 @@ Draw shapeDraw(rf::ShapeKind k) {
     case rf::ShapeKind::Cylinder: return [c](QPainter& p) { drawCylinder(p, c); };
     case rf::ShapeKind::Cone: return [c](QPainter& p) { drawCone(p, c); };
     case rf::ShapeKind::Plane: return [c](QPainter& p) { drawPlane(p, c); };
+    case rf::ShapeKind::Mesh: return [c](QPainter& p) { drawModel(p, c); };
     }
     return [](QPainter&) {};
 }
@@ -415,11 +477,12 @@ int dumpIcons(const QString& dir, int size) {
     QDir().mkpath(dir);
     int n = 0;
     auto save = [&](const QString& name, const Draw& draw) { n += render(size, 1.0, draw).save(dir + "/" + name + ".png") ? 1 : 0; };
-    const char* shapes[] = {"shape-cube", "shape-sphere", "shape-cylinder", "shape-cone", "shape-plane"};
-    for (int k = 0; k < 5; ++k) save(shapes[k], shapeDraw(rf::ShapeKind(k)));
+    const char* shapes[] = {"shape-cube", "shape-sphere", "shape-cylinder", "shape-cone", "shape-plane", "shape-model"};
+    for (int k = 0; k < 6; ++k) save(shapes[k], shapeDraw(rf::ShapeKind(k)));
     const char* roles[] = {"role-rigid", "role-soft", "role-liquid", "role-cloth", "role-magnet", "role-smoke", "role-flame", "role-heat"};
     for (int k = 0; k < int(RoleIcon::Count); ++k) save(roles[k], roleDraw(RoleIcon(k)));
-    const char* controls[] = {"play", "pause", "step", "reset", "undo", "redo", "visible", "hidden", "locked", "unlocked"};
+    const char* controls[] = {"play", "pause", "stop", "step", "reset", "undo", "redo", "visible", "hidden", "locked", "unlocked",
+                              "tool-select", "tool-move", "tool-rotate", "tool-scale"};
     for (int k = 0; k < int(ControlIcon::Count); ++k) {
         const ControlIcon c = ControlIcon(k);
         save(controls[k], [c](QPainter& p) { drawControl(p, c); });

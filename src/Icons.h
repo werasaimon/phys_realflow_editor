@@ -12,8 +12,12 @@
 // The roles as the editor shows them: what a shape is made of, and what it also does.
 enum class RoleIcon { Rigid, Soft, Liquid, Cloth, Magnet, Smoke, Flame, Heat, Count };
 
-// Buttons of the simulation: run, pause, one step, back to the start, undo, redo, eye, lock.
-enum class ControlIcon { Play, Pause, Step, Reset, Undo, Redo, Visible, Hidden, Locked, Unlocked, Count };
+// Buttons of the simulation: run, pause, stop, one step, back to the start, undo, redo, eye, lock,
+// and the tools of the edit mode: select, move, rotate, scale.
+enum class ControlIcon {
+    Play, Pause, Stop, Step, Reset, Undo, Redo, Visible, Hidden, Locked, Unlocked,
+    ToolSelect, ToolMove, ToolRotate, ToolScale, Count
+};
 
 QIcon shapeIcon(rf::ShapeKind shape, int size = 48);
 QIcon roleIcon(RoleIcon role, int size = 40);

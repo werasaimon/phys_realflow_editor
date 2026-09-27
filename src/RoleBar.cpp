@@ -74,4 +74,9 @@ void RoleBar::setRoles(const rf::Entity& e) {
         const QSignalBlocker quiet(buttons_[k]);
         buttons_[k]->setChecked(roleEnabled(e, RoleIcon(k)));
     }
+    // Cloth is a sheet: made from a plane or the top face of a shape, not from a model (yet).
+    QToolButton* cloth = buttons_[int(RoleIcon::Cloth)];
+    const bool model = e.shape == rf::ShapeKind::Mesh;
+    cloth->setEnabled(!model);
+    cloth->setToolTip(model ? "Ткань пока только из плоскости или верхней грани формы" : kTips[int(RoleIcon::Cloth)]);
 }
