@@ -16,6 +16,7 @@ endif()
 
 option(RF_EDITOR_TESTS "Also build the SDK's rf_tests" OFF)
 set(RF_BUILD_TESTS ${RF_EDITOR_TESTS} CACHE BOOL "" FORCE)
+set(RF_BUILD_APP OFF CACHE BOOL "" FORCE) # the SDK's own app target (older SDK commits): this program replaces it
 add_subdirectory(extern/phys_realflow)
 
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets Charts)
