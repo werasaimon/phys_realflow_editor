@@ -2,6 +2,7 @@
 
 #include "ParamForm.h"
 #include "PlotPanel.h"
+#include "SceneBuilder.h"
 #include "Viewport.h"
 
 #include "core/Probe.h"
@@ -13,6 +14,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDateTime>
+#include <QDir>
 #include <QDockWidget>
 #include <QDoubleSpinBox>
 #include <QFileDialog>
@@ -70,6 +72,7 @@ MainWindow::MainWindow() {
     });
     connect(view_, &Viewport::grabStarted, this, [this](int body, Vector3 p) {
         ctrl_->post([body, p](Simulation& s) { s.rigid.grab(body, p); });
+        if (builder_) builder_->selectBody(body); // a click on a body selects it in the scene builder
     });
     connect(view_, &Viewport::particleGrabStarted, this, [this](Vector3 p) {
         ctrl_->post([p](Simulation& s) { s.particles.grab(p); });
@@ -91,6 +94,8 @@ MainWindow::MainWindow() {
     buildParameterDock();
     buildVisualDock();
     buildResultsDock();
+    buildSceneBuilderDock();
+    buildSceneMenu();
 
     status_ = new QLabel;
     statusBar()->addPermanentWidget(status_, 1);
@@ -650,6 +655,58 @@ void MainWindow::buildParameterDock() {
     dock->setWidget(scroll);
     addDockWidget(Qt::LeftDockWidgetArea, dock);
     menuBar()->findChild<QMenu*>("viewMenu")->addAction(dock->toggleViewAction());
+}
+
+// ---------------------------------------------------------------------------
+// Scene builder ("Конструктор"): shapes with roles, saved as *.rfscene
+// ---------------------------------------------------------------------------
+void MainWindow::buildSceneBuilderDock() {
+    auto* dock = new QDockWidget("Конструктор", this);
+    dock->setObjectName("builderDock");
+    auto* scroll = new QScrollArea;
+    scroll->setWidgetResizable(true);
+    scroll->setFrameShape(QFrame::NoFrame);
+    builder_ = new SceneBuilder(ctrl_.get());
+    scroll->setWidget(builder_);
+    scroll->setMinimumWidth(360);
+    dock->setWidget(scroll);
+    addDockWidget(Qt::RightDockWidgetArea, dock);
+    menuBar()->findChild<QMenu*>("viewMenu")->addAction(dock->toggleViewAction());
+}
+
+// Where "Открыть…" starts: the editor's examples/ (next to the program when installed, else the
+// source tree the build came from).
+static QString examplesDir() {
+    const QString nextToExe = QCoreApplication::applicationDirPath() + "/examples";
+    if (QDir(nextToExe).exists()) return nextToExe;
+#ifdef RF_EDITOR_EXAMPLES
+    return QStringLiteral(RF_EDITOR_EXAMPLES);
+#else
+    return QDir::currentPath();
+#endif
+}
+
+void MainWindow::buildSceneMenu() {
+    auto* menu = new QMenu("С&цена", this);
+    menu->addAction("Новая пустая сцена", QKeySequence::New, this, [this] { builder_->newScene(); });
+    menu->addAction("Открыть…", QKeySequence::Open, this, [this] {
+        const QString path = QFileDialog::getOpenFileName(this, "Открыть сцену", examplesDir(), "Сцена PhysRealFlow (*.rfscene)");
+        if (path.isEmpty()) return;
+        QString error;
+        if (!builder_->openFile(path, error)) QMessageBox::warning(this, "Открыть сцену", error);
+    });
+    menu->addAction("Сохранить…", QKeySequence::Save, this, [this] {
+        const QString path = QFileDialog::getSaveFileName(this, "Сохранить сцену", examplesDir(), "Сцена PhysRealFlow (*.rfscene)");
+        if (path.isEmpty()) return;
+        QString error;
+        if (!builder_->saveFile(path, error)) QMessageBox::warning(this, "Сохранить сцену", error);
+    });
+    menu->addSeparator();
+    // TODO: the node view - entities and roles as boxes wired together (the next step of the builder).
+    auto* graphView = menu->addAction("Граф ролей (скоро)");
+    graphView->setEnabled(false);
+    QMenu* viewMenu = menuBar()->findChild<QMenu*>("viewMenu");
+    menuBar()->insertMenu(viewMenu->menuAction(), menu);
 }
 
 // ---------------------------------------------------------------------------

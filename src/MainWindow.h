@@ -10,6 +10,7 @@
 
 class ParamForm;
 class PlotPanel;
+class SceneBuilder;
 class Viewport;
 class QAction;
 class QComboBox;
@@ -33,6 +34,8 @@ private:
     void buildParameterDock();
     void buildVisualDock();
     void buildResultsDock();
+    void buildSceneBuilderDock(); // the "Конструктор": shapes with roles, no code (SceneBuilder)
+    void buildSceneMenu();
     ParamForm* buildObjectForm();
     ParamForm* buildFluidForm();
     ParamForm* buildGasForm();
@@ -75,6 +78,7 @@ private:
     QTableWidget* info_ = nullptr;
     QTableWidget* sensors_ = nullptr; // every probe channel, by name
     PlotPanel* plots_ = nullptr;
+    SceneBuilder* builder_ = nullptr;
     QLabel* status_ = nullptr;
 
     // Mouse brush (GUI-side settings, applied through Disturbance commands)

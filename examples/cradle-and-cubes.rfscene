@@ -1,0 +1,58 @@
+# PhysRealFlow scene
+world gravity 0 -9.81000042 0 size 4 3 4 gas 0 magneticGas 0
+entity "Пол"
+  shape plane size 3 0.0199999996 3 position 0 0.00999999978 0 rotation 0 0 0 color 0.600000024 0.620000005 0.660000026
+  rigid density 500 friction 0.5 restitution 0.200000003 fixed 1 velocity 0 0 0 spin 0 0 0
+end
+entity "Шар 1"
+  shape sphere size 0.100000001 0.100000001 0.100000001 position -1.20000005 0.0700000003 -0.800000012 rotation 0 0 0 color 0.75 0.769999981 0.800000012
+  rigid density 7800 friction 0 restitution 1 fixed 0 velocity 2 0 0 spin 0 0 0
+end
+entity "Шар 2"
+  shape sphere size 0.100000001 0.100000001 0.100000001 position -0.600000024 0.0700000003 -0.800000012 rotation 0 0 0 color 0.75 0.769999981 0.800000012
+  rigid density 7800 friction 0 restitution 1 fixed 0 velocity 0 0 0 spin 0 0 0
+end
+entity "Шар 3"
+  shape sphere size 0.100000001 0.100000001 0.100000001 position -0.49000001 0.0700000003 -0.800000012 rotation 0 0 0 color 0.75 0.769999981 0.800000012
+  rigid density 7800 friction 0 restitution 1 fixed 0 velocity 0 0 0 spin 0 0 0
+end
+entity "Шар 4"
+  shape sphere size 0.100000001 0.100000001 0.100000001 position -0.380000025 0.0700000003 -0.800000012 rotation 0 0 0 color 0.75 0.769999981 0.800000012
+  rigid density 7800 friction 0 restitution 1 fixed 0 velocity 0 0 0 spin 0 0 0
+end
+entity "Шар 5"
+  shape sphere size 0.100000001 0.100000001 0.100000001 position -0.270000041 0.0700000003 -0.800000012 rotation 0 0 0 color 0.75 0.769999981 0.800000012
+  rigid density 7800 friction 0 restitution 1 fixed 0 velocity 0 0 0 spin 0 0 0
+end
+entity "Шар 6"
+  shape sphere size 0.100000001 0.100000001 0.100000001 position -0.160000026 0.0700000003 -0.800000012 rotation 0 0 0 color 0.75 0.769999981 0.800000012
+  rigid density 7800 friction 0 restitution 1 fixed 0 velocity 0 0 0 spin 0 0 0
+end
+entity "Куб 1"
+  shape box size 0.200000003 0.200000003 0.200000003 position 0.600000024 0.119999997 0.400000006 rotation 0 0 0 color 0.899999976 0.5 0.25
+  rigid density 500 friction 0.5 restitution 0.200000003 fixed 0 velocity 0 0 0 spin 0 0 0
+end
+entity "Куб 2"
+  shape box size 0.200000003 0.200000003 0.200000003 position 0.600000024 0.329999983 0.400000006 rotation 0 0 0 color 0.799999952 0.5 0.349999994
+  rigid density 500 friction 0.5 restitution 0.200000003 fixed 0 velocity 0 0 0 spin 0 0 0
+end
+entity "Куб 3"
+  shape box size 0.200000003 0.200000003 0.200000003 position 0.600000024 0.539999962 0.400000006 rotation 0 0 0 color 0.699999988 0.5 0.449999988
+  rigid density 500 friction 0.5 restitution 0.200000003 fixed 0 velocity 0 0 0 spin 0 0 0
+end
+entity "Куб 4"
+  shape box size 0.200000003 0.200000003 0.200000003 position 0.600000024 0.75 0.400000006 rotation 0 0 0 color 0.599999964 0.5 0.550000012
+  rigid density 500 friction 0.5 restitution 0.200000003 fixed 0 velocity 0 0 0 spin 0 0 0
+end
+entity "Куб 5"
+  shape box size 0.200000003 0.200000003 0.200000003 position 0.600000024 0.959999979 0.400000006 rotation 0 0 0 color 0.49999997 0.5 0.649999976
+  rigid density 500 friction 0.5 restitution 0.200000003 fixed 0 velocity 0 0 0 spin 0 0 0
+end
+entity "Куб 6"
+  shape box size 0.200000003 0.200000003 0.200000003 position 0.600000024 1.16999996 0.400000006 rotation 0 0 0 color 0.399999976 0.5 0.75
+  rigid density 500 friction 0.5 restitution 0.200000003 fixed 0 velocity 0 0 0 spin 0 0 0
+end
+entity "Желейный шар"
+  shape sphere size 0.200000003 0.200000003 0.200000003 position -0.200000003 1.20000005 0.400000006 rotation 0 0 0 color 0.449999988 0.850000024 0.349999994
+  soft density 150 stiffness 0.300000012
+end

@@ -17,7 +17,9 @@ endif()
 option(RF_EDITOR_TESTS "Also build the SDK's rf_tests" OFF)
 set(RF_BUILD_TESTS ${RF_EDITOR_TESTS} CACHE BOOL "" FORCE)
 set(RF_BUILD_APP OFF CACHE BOOL "" FORCE) # the SDK's own app target (older SDK commits): this program replaces it
-add_subdirectory(extern/phys_realflow)
+set(RF_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extern/phys_realflow" CACHE PATH
+    "The PhysRealFlow SDK source tree (the submodule, or a local checkout while developing)")
+add_subdirectory(${RF_SDK_DIR} phys_realflow)
 
 find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets Charts)
 qt_standard_project_setup()
@@ -34,9 +36,12 @@ qt_add_executable(realflow WIN32
   src/ViewportTools.h   src/ViewportTools.cpp
   src/FluidSurfaceRenderer.h src/FluidSurfaceRenderer.cpp
   src/PlotPanel.h       src/PlotPanel.cpp
+  src/SceneBuilder.h    src/SceneBuilder.cpp
 )
 target_link_libraries(realflow PRIVATE rfcore rfsamples
   Qt6::Core Qt6::Gui Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets Qt6::Charts)
+# "Открыть…" of the scene builder starts in examples/ of this source tree.
+target_compile_definitions(realflow PRIVATE RF_EDITOR_EXAMPLES="${CMAKE_CURRENT_SOURCE_DIR}/examples")
 if(MSVC)
   target_compile_options(realflow PRIVATE /W4 /utf-8)
 else()
