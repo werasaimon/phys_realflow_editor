@@ -83,11 +83,13 @@ void main() {
 )";
 
 // Lit meshes: the obstacle, rigid bodies, cloth; also the glass vessel (uAlpha < 1).
-// Lighting: the scene's own lights when it has any (RenderSnapshot::lights: one sun and up to eight
-// lamps and spotlights, all in view space) - Lambert diffuse, a soft Blinn-Phong highlight, a lamp
-// fading quadratically to nothing at its range, a spotlight's cone with a smooth edge, the sun's
-// shadow from a shadow map (3 x 3 PCF) - over a constant ambient. No lights: the viewer's own light
-// from the top left and a head light, as before.
+// Lighting: the scene's own lights when it has any (RenderSnapshot::lights: up to eight suns, lamps
+// and spotlights, all in view space) - Lambert diffuse, a soft Blinn-Phong highlight, a lamp fading
+// quadratically to nothing at its range, a spotlight's cone with a smooth edge - over a constant
+// ambient. Up to four of them cast shadows (ViewportShadows.cpp): a sun or a spotlight from a depth
+// map, a lamp from a cube of distances, each softened by a few neighbouring samples (PCF) - compiled
+// in only while some light casts one (RF_SHADOWS). No lights: the viewer's own light from the top
+// left and a head light, as before.
 static const char* kMeshVS = R"(in vec3 aPos;
 in vec3 aNormal;
 in float aScalar;
@@ -105,23 +107,99 @@ static const char* kMeshFS = R"(
 in vec3 vN; in vec3 vPosV; in float vS;
 uniform vec3 uColor; uniform int uUseScalar; uniform float uMin, uMax; uniform int uCmap;
 uniform float uAlpha = 1.0; // < 1: glass (drawn blended, after the volume)
-uniform int uLightCount;     // lamps and spotlights, up to 8
+uniform int uLightCount;     // the scene's lights, up to 8: suns, lamps and spotlights
 uniform vec3 uLightPos[8], uLightDir[8], uLightColor[8]; // uLightDir: where it shines; colour * intensity
 uniform float uLightRange[8], uLightCosOuter[8], uLightCosInner[8]; // a lamp: cosines -2 and -1 (no cone)
-uniform int uSunOn; uniform vec3 uSunDir, uSunColor; // uSunDir: towards the sun
-uniform int uShadowOn; uniform sampler2D uShadowMap; uniform mat4 uShadowFromView; uniform float uShadowTexel;
+uniform int uLightSun[8];    // 1: a sun - parallel light along uLightDir, no fading, no cone
+uniform int uLightShadow[8]; // the shadow map it casts with (0 .. 3), -1: no shadow
 out vec4 o;
-// How much of the sun reaches this point: the fraction of 3 x 3 shadow-map texels it is in front of.
-float sunLit() {
-    if (uShadowOn == 0) return 1.0;
-    vec4 s = uShadowFromView * vec4(vPosV, 1.0);
-    vec3 p = s.xyz / s.w;
-    if (p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z > 1.0) return 1.0;
+#ifdef RF_SHADOWS
+// The four shadow maps. GLSL 1.30 cannot pick a sampler by a variable index, so each one has its own
+// name: a depth map for a sun or a spotlight, a cube of distances for a lamp.
+uniform sampler2D uShadowMap0, uShadowMap1, uShadowMap2, uShadowMap3;
+uniform samplerCube uShadowCube0, uShadowCube1, uShadowCube2, uShadowCube3;
+uniform mat4 uShadowFromView[4]; // view space -> the depth map's [0, 1] cube (sun, spotlight)
+uniform vec2 uShadowLens[4];     // a spotlight's near and far plane (to make its depth linear); 0 0: a sun
+uniform float uShadowTexel[4];   // one texel of the depth map, in [0, 1] units
+uniform vec3 uShadowLamp[4];     // a lamp's position in the world
+uniform float uShadowFar[4];     // a lamp's cube holds distance / uShadowFar
+uniform mat4 uViewToWorld;       // the lamps' cubes live in world space
+
+// A depth read from a spotlight's map (0 .. 1, crowded near the far plane) back as a distance along
+// its axis: the inverse of the perspective depth, z = 2 n f / (f + n - (2 d - 1)(f - n)).
+float linearDepth(float d, vec2 lens) {
+    return 2.0 * lens.x * lens.y / (lens.y + lens.x - (2.0 * d - 1.0) * (lens.y - lens.x));
+}
+
+// How much of a sun or a spotlight reaches this point: its depth map holds, in every direction from
+// the light, the depth of the nearest surface (Williams 1978, "Casting curved shadows on curved
+// surfaces"); the point is lit where it is not deeper. The fraction of the 3 x 3 texels around it
+// that it is in front of softens the edge a texel wide (percentage-closer filtering, Reeves, Salesin
+// & Cook 1987). The bias keeps a lit face from shadowing itself: a little depth for a sun, a few
+// centimetres (growing with distance) for a spotlight.
+float litByMap(sampler2D map, int s) {
+    vec4 h = uShadowFromView[s] * vec4(vPosV, 1.0);
+    vec3 p = h.xyz / h.w;
+    if (h.w <= 0.0 || p.x < 0.0 || p.x > 1.0 || p.y < 0.0 || p.y > 1.0 || p.z > 1.0) return 1.0;
+    bool spot = uShadowLens[s].y > 0.0;
+    float here = spot ? linearDepth(p.z, uShadowLens[s]) : p.z;
+    float bias = spot ? 0.01 + 0.01 * here : 0.003;
     float lit = 0.0;
     for (int i = -1; i <= 1; ++i)
-        for (int j = -1; j <= 1; ++j) lit += p.z - 0.003 <= texture(uShadowMap, p.xy + vec2(i, j) * uShadowTexel).r ? 1.0 : 0.0;
+        for (int j = -1; j <= 1; ++j) {
+            float stored = texture(map, p.xy + vec2(i, j) * uShadowTexel[s]).r;
+            if (spot) stored = linearDepth(stored, uShadowLens[s]);
+            lit += here - bias <= stored ? 1.0 : 0.0;
+        }
     return lit / 9.0;
 }
+
+// How much of a lamp reaches this point: the lamp's cube map holds, in every direction, the distance
+// to the nearest surface (omnidirectional shadow maps: Gerasimov, "GPU Gems" ch. 12, 2004); the point
+// is lit where it is not farther. Five samples around the direction soften the edge.
+float litByCube(samplerCube cube, int s) {
+    vec3 w = (uViewToWorld * vec4(vPosV, 1.0)).xyz - uShadowLamp[s];
+    float d = max(length(w), 1e-4);
+    vec3 a = normalize(cross(w, abs(w.y) < 0.99 * d ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
+    vec3 b = cross(w / d, a);
+    float r = 0.012 * d, bias = 0.02 + 0.02 * d, lit = 0.0;
+    vec3 taps[5] = vec3[5](vec3(0.0), a * r, -a * r, b * r, -b * r);
+    for (int k = 0; k < 5; ++k) lit += d - bias <= texture(cube, w + taps[k]).r * uShadowFar[s] ? 1.0 : 0.0;
+    return lit / 5.0;
+}
+
+// The shadow of light i at this point: 1 lit, 0 in shadow. Only the slots drawn this frame are
+// compiled in, each with its own kind (RF_SLOTk_MAP: a sun's or a spotlight's depth map, RF_SLOTk_CUBE:
+// a lamp's cube; Viewport::buildMeshShader): a lookup that is never used is not free - the software
+// renderer runs every branch of a shader, and all eight made each frame ten times slower.
+float shadowOf(int i) {
+    int s = uLightShadow[i];
+#if defined(RF_SLOT0_MAP)
+    if (s == 0) return litByMap(uShadowMap0, 0);
+#elif defined(RF_SLOT0_CUBE)
+    if (s == 0) return litByCube(uShadowCube0, 0);
+#endif
+#if defined(RF_SLOT1_MAP)
+    if (s == 1) return litByMap(uShadowMap1, 1);
+#elif defined(RF_SLOT1_CUBE)
+    if (s == 1) return litByCube(uShadowCube1, 1);
+#endif
+#if defined(RF_SLOT2_MAP)
+    if (s == 2) return litByMap(uShadowMap2, 2);
+#elif defined(RF_SLOT2_CUBE)
+    if (s == 2) return litByCube(uShadowCube2, 2);
+#endif
+#if defined(RF_SLOT3_MAP)
+    if (s == 3) return litByMap(uShadowMap3, 3);
+#elif defined(RF_SLOT3_CUBE)
+    if (s == 3) return litByCube(uShadowCube3, 3);
+#endif
+    return 1.0;
+}
+#else
+// No light casts a shadow this frame: everything is lit, and the shadow code is left out entirely.
+float shadowOf(int i) { return 1.0; }
+#endif
 vec3 oneLight(vec3 base, vec3 n, vec3 v, vec3 l, vec3 radiance) {
     float diff = max(dot(n, l), 0.0);
     float spec = diff > 0.0 ? pow(max(dot(n, normalize(l + v)), 0.0), 32.0) * 0.25 : 0.0;
@@ -129,16 +207,19 @@ vec3 oneLight(vec3 base, vec3 n, vec3 v, vec3 l, vec3 radiance) {
 }
 vec3 sceneLights(vec3 base, vec3 n, vec3 v) {
     vec3 c = base * (0.18 + 0.1 * max(dot(n, v), 0.0)); // the ambient stays
-    if (uSunOn == 1) c += oneLight(base, n, v, uSunDir, uSunColor) * sunLit();
     for (int i = 0; i < 8; ++i) {
         if (i >= uLightCount) break;
-        vec3 toLight = uLightPos[i] - vPosV;
-        float d = length(toLight);
-        vec3 l = toLight / max(d, 1e-5);
-        float x = clamp(d / uLightRange[i], 0.0, 1.0);
-        float fade = (1.0 - x * x) * (1.0 - x * x);
-        float cone = smoothstep(uLightCosOuter[i], uLightCosInner[i], dot(-l, uLightDir[i]));
-        c += oneLight(base, n, v, l, uLightColor[i]) * fade * cone;
+        vec3 l = -uLightDir[i];    // a sun: the same direction everywhere, never fading
+        float fade = 1.0, cone = 1.0;
+        if (uLightSun[i] == 0) {   // a lamp or a spotlight: from its position, fading with distance
+            vec3 toLight = uLightPos[i] - vPosV;
+            float d = length(toLight);
+            l = toLight / max(d, 1e-5);
+            float x = clamp(d / uLightRange[i], 0.0, 1.0);
+            fade = (1.0 - x * x) * (1.0 - x * x);
+            cone = smoothstep(uLightCosOuter[i], uLightCosInner[i], dot(-l, uLightDir[i]));
+        }
+        if (fade * cone > 0.0) c += oneLight(base, n, v, l, uLightColor[i]) * fade * cone * shadowOf(i);
     }
     return c;
 }
@@ -161,19 +242,35 @@ void main() {
     vec3 h = normalize(l + v);
     float spec = pow(max(dot(n, h), 0.0), 48.0) * 0.3;
     vec3 c = base * (0.18 + 0.55 * diff + 0.35 * fill) + vec3(spec) + ember;
-    if (uLightCount > 0 || uSunOn == 1) c = sceneLights(base, n, v) + ember;
+    if (uLightCount > 0) c = sceneLights(base, n, v) + ember;
     // Glass: the rim (grazing view) is brighter, the face almost clear (Schlick's Fresnel).
     float alpha = uAlpha < 1.0 ? uAlpha + (1.0 - uAlpha) * pow(1.0 - max(dot(n, v), 0.0), 4.0) : 1.0;
     o = vec4(c, alpha);
 }
 )";
 
-// The sun's shadow map: the depth of every body as the sun sees it (nothing else is written).
+// A sun's or a spotlight's shadow map: the depth of every body as the light sees it (nothing else is
+// written).
 static const char* kShadowVS = R"(in vec3 aPos;
 uniform mat4 uLightVP, uModel;
 void main() { gl_Position = uLightVP * uModel * vec4(aPos, 1.0); })";
 static const char* kShadowFS = R"(out vec4 o;
 void main() { o = vec4(1.0); })";
+
+// A lamp's cube of distances, one face at a time: every pixel keeps how far from the lamp the nearest
+// surface in its direction is, divided by the lamp's reach (so 1.0 is "nothing there").
+static const char* kDistanceVS = R"(in vec3 aPos;
+uniform mat4 uLightVP, uModel;
+out vec3 vWorld;
+void main() {
+    vec4 w = uModel * vec4(aPos, 1.0);
+    vWorld = w.xyz;
+    gl_Position = uLightVP * w;
+})";
+static const char* kDistanceFS = R"(in vec3 vWorld;
+uniform vec3 uLamp; uniform float uFar;
+out vec4 o;
+void main() { o = vec4(length(vWorld - uLamp) / uFar); })";
 
 // Particles as sphere impostors (point sprites shaded as spheres).
 static const char* kSphereVS = R"(in vec3 aPos;

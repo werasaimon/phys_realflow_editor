@@ -149,7 +149,12 @@ public:
     void setLookThrough(bool on, const rf::Vector3& eye, const rf::Vector3& forward, const rf::Vector3& up, float fovDeg,
                         float nearClip, float farClip);
     bool lookingThrough() const { return lookThrough_; }
-    bool sunShadowDrawn() const { return shadowOn_; } // the last frame had the sun's shadow map
+    bool sunShadowDrawn() const { return sunShadowDrawn_; } // the last frame had a sun's shadow map
+    // Shadows are drawn for at most this many lights a frame: each costs a render pass (a lamp six).
+    static constexpr int kMaxShadowLights = 4;
+    // The lights (indices into the snapshot's lights) that asked for a shadow and got none in the last
+    // frame, because more than kMaxShadowLights were ticked.
+    const std::vector<int>& lightsWithoutShadow() const { return shadowLess_; }
 
 signals:
     // World-space point and velocity of a mouse stroke (velocity is zero on the first click).
@@ -176,6 +181,8 @@ signals:
     void lookThroughMoved(rf::Vector3 eye, rf::Vector3 forward, rf::Vector3 up);
     // The GPU / driver cannot do OpenGL 3.0: the window offers a restart in software mode.
     void openGLUnsupported(QString renderer);
+    // The lights left without a shadow changed (indices into the snapshot's lights; empty: none).
+    void shadowsLeftOut(std::vector<int> lights);
 
 protected:
     void initializeGL() override;
@@ -238,9 +245,17 @@ private:
     void drawSceneMarkers(const QMatrix4x4& vp);
     void syncLookThrough();                    // the view moved while looking through: say where to
     void applySceneLights(const QMatrix4x4& view); // the mesh shader's lights for this frame
-    void renderSunShadow();                    // the shadow map of the first sun with shadows
-    bool ensureShadowTarget();
-    void drawShadowCasters();
+    // ViewportShadows.cpp: the shadow maps of the lights with "Отбрасывает тени" ticked.
+    void renderShadows();                      // choose the lights, draw their maps
+    std::vector<int> pickShadowLights(std::vector<int>& without) const;
+    bool renderDepthMap(int slot, const rf::RenderSnapshot::LightInfo& light);
+    bool renderDistanceCube(int slot, const rf::RenderSnapshot::LightInfo& light);
+    bool ensureDepthMap(int slot);
+    bool ensureDistanceCube(int slot);
+    void drawShadowCasters(QOpenGLShaderProgram& program);
+    void bindShadowMaps(const QMatrix4x4& view); // the maps and their matrices, into the mesh shader
+    void releaseShadowMaps();
+    void uploadClothMesh();                    // this frame's cloth and soft surfaces (shadows, then drawing)
     void drawEditLabel(class QPainter& p); // the live amount of a drag next to the cursor
     bool modalKey(QKeyEvent* e);
     void dragKey(QKeyEvent* e);        // X / Y / Z during a handle drag
@@ -342,10 +357,23 @@ private:
     bool lookThrough_ = false;
     OrbitCamera editorCamera_;                 // the editor's own view while looking through a camera
     QVector3D lookEye_, lookForward_, lookUp_; // the view as last set or reported (moves are the difference)
-    QOpenGLShaderProgram shadowProg_;
-    GLuint shadowFbo_ = 0, shadowTex_ = 0;
-    bool shadowOn_ = false;
-    QMatrix4x4 shadowVP_;                      // world -> the sun's clip space
+    // Shadows: one slot per light that casts one this frame (ViewportShadows.cpp).
+    struct ShadowMap {
+        int light = -1;                   // which of the snapshot's lights (-1: the slot is unused)
+        bool cube = false;                // a lamp: a cube of distances; a sun or a spotlight: a depth map
+        QMatrix4x4 viewProj;              // world -> the light's clip space (sun, spotlight)
+        float nearClip = 0, farClip = 0;  // a spotlight's lens (0 0 for a sun); a lamp's reach in farClip
+        rf::Vector3 lampAt;               // a lamp's position
+        GLuint fbo = 0, depth = 0;        // the depth map
+        GLuint cubeFbo = 0, cubeTex = 0, cubeDepth = 0; // the cube of distances and its depth buffer
+    };
+    ShadowMap shadowMaps_[kMaxShadowLights];
+    std::vector<int> shadowLess_;              // ticked, but over the budget in the last frame
+    bool sunShadowDrawn_ = false;
+    QString meshSlots_;                        // the shadow slots compiled into the mesh shader (M map, C cube, - none)
+    void buildMeshShader(const QString& slotKinds);
+    QOpenGLShaderProgram shadowProg_, distanceProg_;
+    std::vector<std::pair<int, int>> clothRanges_; // first vertex and count of each cloth / soft surface
     std::vector<GizmoPiece> gizmoPieces_; // reused every frame: drawing the gizmo allocates nothing
     // The outline mask: an offscreen target the outlined objects are drawn into, and their triangles
     // in world space (selected, hovered, without a role), rebuilt only when the scene or the lists change.

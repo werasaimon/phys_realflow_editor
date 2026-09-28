@@ -215,7 +215,10 @@ void SceneBuilder::buildLightCards(QVBoxLayout* col) {
     lightCone_ = lightNumber(lightForm_, "Конус, °", 1, 179, 1, 1, false);
     lightSoftness_ = lightNumber(lightForm_, "Мягкий край, °", 0, 90, 1, 1, false);
     lightShadows_ = new QCheckBox("Отбрасывает тени");
-    lightShadows_->setToolTip("Тени пока умеет солнце: первое солнце с этой галочкой");
+    lightShadows_->setObjectName("lightShadows");
+    lightShadows_->setToolTip("Тела отбрасывают тень от этого света. Каждая тень — лишний проход рендера каждый кадр "
+                              "(у лампы — шесть), поэтому у ламп и прожекторов она сначала выключена, как в Blender и Unity. "
+                              "Тени рисуются не больше чем от 4 источников сразу");
     connect(lightShadows_, &QCheckBox::toggled, this, &SceneBuilder::onLightEdited);
     lightForm_->addRow(lightShadows_);
     lightCard_->body()->addLayout(lightForm_);
@@ -259,7 +262,6 @@ void SceneBuilder::fillLightCards(const SceneObject& o) {
         lightForm_->setRowVisible(lightRange_, l->kind != LightKind::Sun);
         lightForm_->setRowVisible(lightCone_, l->kind == LightKind::Spot);
         lightForm_->setRowVisible(lightSoftness_, l->kind == LightKind::Spot);
-        lightForm_->setRowVisible(lightShadows_, l->kind == LightKind::Sun);
     }
     if (c) {
         cameraShown_ = *c;
@@ -281,8 +283,11 @@ void SceneBuilder::onLightEdited() {
     after.coneDeg = float(lightCone_->value());
     after.softnessDeg = float(lightSoftness_->value());
     after.shadows = lightShadows_->isChecked();
+    // A number dragged or typed merges its many small steps into one undo step; a tick or a kind is one
+    // click, always its own step (merged, a tick right after making a lamp took the lamp away on undo).
+    const bool oneClick = after.shadows != lightShown_.shadows || after.kind != lightShown_.kind;
     prepareEdit(selectedId_);
-    remember(true);
+    remember(!oneClick);
     for (uint32_t id : selection_) {
         Light* l = lightById(id);
         if (!l) continue;

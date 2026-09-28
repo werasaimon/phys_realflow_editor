@@ -81,8 +81,7 @@ Viewport::~Viewport() {
     if (depthFbo_) glDeleteFramebuffers(1, &depthFbo_);
     if (maskTex_) glDeleteTextures(1, &maskTex_);
     if (maskFbo_) glDeleteFramebuffers(1, &maskFbo_);
-    if (shadowTex_) glDeleteTextures(1, &shadowTex_);
-    if (shadowFbo_) glDeleteFramebuffers(1, &shadowFbo_);
+    releaseShadowMaps();
     hullCache_.clear(); // GL objects must die while the context is current
     fluidSurface_.release();
     doneCurrent();
@@ -99,11 +98,28 @@ static void buildProgram(QOpenGLShaderProgram& p, const QString& vs, const QStri
         qWarning("Shader %s failed: %s", name, qPrintable(p.log()));
 }
 
+// The mesh shader with exactly the shadow lookups this frame needs. `slotKinds` says, per shadow slot,
+// what it holds: 'M' a depth map (a sun, a spotlight), 'C' a lamp's cube, '-' nothing ("----": no
+// shadow at all, the shadow code left out). Unused lookups are not free - the software renderer runs
+// every branch of a shader, and all eight made each frame ten times slower (283 ms against 26) - so
+// only the used ones are compiled in, and the program is rebuilt when a tick changes them: once, in a
+// few milliseconds.
+void Viewport::buildMeshShader(const QString& slotKinds) {
+    meshSlots_ = slotKinds;
+    QString defines;
+    for (int s = 0; s < slotKinds.size(); ++s)
+        if (slotKinds[s] != '-') defines += QString("#define RF_SLOT%1_%2\n").arg(s).arg(slotKinds[s] == 'C' ? "CUBE" : "MAP");
+    if (!defines.isEmpty()) defines = "#define RF_SHADOWS\n" + defines;
+    meshProg_.removeAllShaders();
+    const QString fs = glslHeader_ + defines + kColormapGLSL + kMeshFS;
+    buildProgram(meshProg_, glslHeader_ + kMeshVS, fs, "mesh", {"aPos", "aNormal", "aScalar"});
+}
+
 void Viewport::buildShaders() {
     const QString h = glslHeader_;
     const QString hc = h + kColormapGLSL; // fragment shaders that colour by a field
     buildProgram(bgProg_, h + kBgVS, h + kBgFS, "background", {});
-    buildProgram(meshProg_, h + kMeshVS, hc + kMeshFS, "mesh", {"aPos", "aNormal", "aScalar"});
+    buildMeshShader("----");
     buildProgram(sphereProg_, h + kSphereVS, hc + kSphereFS, "sphere", {"aPos", "aScalar", "aColor", "aRadius"});
     buildProgram(lineProg_, h + kLineVS, hc + kLineFS, "line", {"aPos", "aScalar"});
     buildProgram(sliceProg_, h + kSliceVS, hc + kSliceFS, "slice", {"aPos", "aUV"});
@@ -111,6 +127,7 @@ void Viewport::buildShaders() {
     buildProgram(planetProg_, h + kPlanetVS, h + kPlanetFS, "planet", {"aPos", "aNormal", "aScalar"});
     buildProgram(outlineProg_, h + kBgVS, h + kOutlineFS, "outline", {});
     buildProgram(shadowProg_, h + kShadowVS, h + kShadowFS, "shadow", {"aPos"});
+    buildProgram(distanceProg_, h + kDistanceVS, h + kDistanceFS, "distance", {"aPos"});
 }
 
 void Viewport::initializeGL() {
@@ -945,25 +962,32 @@ void Viewport::ensureClothMesh() {
     g.vao->release();
 }
 
-void Viewport::drawCloths(const QMatrix4x4& view, const QMatrix4x4& proj) {
+// This frame's cloth and soft-body surfaces into the cloth buffer, once: the shadow maps and the
+// picture both draw from it. Both sides of every sheet (each with its own normal), smooth normals
+// from the grid; clothRanges_ keeps where each surface starts and how long it is.
+void Viewport::uploadClothMesh() {
+    clothRanges_.clear();
     if (snap_->cloths.empty() && snap_->softMeshes.empty()) return;
-    // Both sides of every sheet (each with its own normal), smooth normals from the grid.
     std::vector<float> v;
-    std::vector<std::pair<int, int>> ranges; // first vertex, count per cloth
     for (const auto& c : snap_->cloths) {
         const int first = int(v.size() / 7);
         appendClothSheet(c, v);
-        ranges.push_back({first, int(v.size() / 7) - first});
+        clothRanges_.push_back({first, int(v.size() / 7) - first});
     }
     for (const auto& m : snap_->softMeshes) { // soft bodies: their skinned surfaces
         const int first = int(v.size() / 7);
         appendSoftSurface(m, v);
-        ranges.push_back({first, int(v.size() / 7) - first});
+        clothRanges_.push_back({first, int(v.size() / 7) - first});
     }
     ensureClothMesh();
+    clothMesh_.vbo->bind();
+    clothMesh_.vbo->allocate(v.data(), int(v.size() * sizeof(float)));
+}
+
+void Viewport::drawCloths(const QMatrix4x4& view, const QMatrix4x4& proj) {
+    if (clothRanges_.empty()) return;
+    const std::vector<std::pair<int, int>>& ranges = clothRanges_;
     GpuMesh& g = clothMesh_;
-    g.vbo->bind();
-    g.vbo->allocate(v.data(), int(v.size() * sizeof(float)));
     meshProg_.bind();
     meshProg_.setUniformValue("uView", view);
     meshProg_.setUniformValue("uProj", proj);
@@ -1244,7 +1268,13 @@ void Viewport::paintGL() {
         return;
     }
     syncLookThrough();
-    if (snap_) renderSunShadow();
+    if (snap_) {
+        uploadClothMesh(); // the cloth casts a shadow too, so its surface is ready before the maps
+        renderShadows();
+        QString slotKinds; // what each shadow slot holds this frame: the mesh shader compiles only those in
+        for (const ShadowMap& m : shadowMaps_) slotKinds += m.light < 0 ? '-' : m.cube ? 'C' : 'M';
+        if (slotKinds != meshSlots_) buildMeshShader(slotKinds);
+    }
     beginFrame();
     if (!snap_) return;
     const QMatrix4x4 view = viewMatrix(), proj = projMatrix(), vp = proj * view;

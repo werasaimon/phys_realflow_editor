@@ -150,6 +150,8 @@ private:
     void buildViewKeys(class QMenu* menu);  // numpad views, gizmo size
     void buildControlsMenu();               // Вид -> Управление
     void buildCamerasMenu();                // Вид -> Камеры: the editor's view or one of the scene's cameras
+    void buildCameraPicker();               // "Смотрю через: ..." in the corner of the 3D view
+    void showShadowBudget(const std::vector<int>& lights); // lights ticked for a shadow but over the budget
     // The play mode made unmistakable (MainWindowPlay.cpp): the frame, the banner and big ▶ ⏸ ■ on
     // the view, K to keep the simulation's poses, Ctrl+K to find a command, Вид → Рендер на процессоре.
     void buildPlayExtras();
@@ -200,6 +202,7 @@ private:
     bool forceFirstStart_ = false;
     QLabel* status_ = nullptr;
     class PlayOverlay* playOverlay_ = nullptr;
+    class CameraPicker* cameraPicker_ = nullptr;
     class CommandSearch* search_ = nullptr;
     QAction* keepAct_ = nullptr;   // K: keep the simulation's poses after Stop
     QAction* searchAct_ = nullptr; // Ctrl+K

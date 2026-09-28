@@ -462,6 +462,7 @@ int runBuilderSelfTest(QMainWindow& w, const QString& shotsDir) {
     if (!shotsDir.isEmpty()) QDir().mkpath(shotsDir);
     run("many", [&] { c.failures += runManyTests(w, *b, v, shotsDir); });
     run("lights", [&] { c.failures += runLightTests(w, *b, v, shotsDir); });
+    run("shadows", [&] { c.failures += runShadowTests(w, *b, v, shotsDir); });
     run("window", [&] { c.failures += runPlayTests(w, *b, v, shotsDir); });
     if (!shotsDir.isEmpty()) run("shots", [&] {
         c.check(runGizmoShots(w, shotsDir) == 0, "screenshots of the gizmo");

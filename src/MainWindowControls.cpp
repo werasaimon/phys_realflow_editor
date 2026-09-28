@@ -6,6 +6,7 @@
 // view or a camera of the scene), Esc out of a camera. The toolbar is in MainWindowToolbar.cpp.
 #include "MainWindow.h"
 
+#include "CameraPicker.h"
 #include "ClonePopover.h"
 #include "ControlScheme.h"
 #include "RoleBar.h"
@@ -222,6 +223,41 @@ void MainWindow::connectViewportControls() {
     statusBar()->addWidget(hintLabel_, 1);
     connect(view_, &Viewport::hintChanged, hintLabel_, &QLabel::setText);
     hintLabel_->setText(view_->mouseHint());
+}
+
+// "Смотрю через: [Вид редактора ▾]" in the corner of the 3D view (CameraPicker.h): the same choice as
+// Вид -> Камеры, where the eyes are. It follows the scene: the cameras change (sceneMarkers), the
+// view switches another way (cameraView: the inspector's button, the menu, Esc), a scene is loaded.
+void MainWindow::buildCameraPicker() {
+    cameraPicker_ = new CameraPicker(view_);
+    connect(cameraPicker_, &CameraPicker::chosen, this, [this](uint32_t id) { builder_->lookThrough(id); });
+    auto follow = [this] {
+        std::vector<CameraPicker::Choice> cameras;
+        for (const rf::Camera& c : builder_->graph().cameras) cameras.push_back({c.id, QString::fromStdString(c.name)});
+        cameraPicker_->showCameras(cameras, builder_->lookingThrough());
+    };
+    connect(builder_, &SceneBuilder::sceneMarkers, this, follow);
+    connect(builder_, &SceneBuilder::cameraView, this, follow);
+    connect(builder_, &SceneBuilder::modeChanged, this, follow);
+    follow();
+}
+
+// More lights have "Отбрасывает тени" ticked than the view draws shadows for (Viewport::kMaxShadowLights):
+// the status bar names the ones left without a shadow this frame, and says why. `lights` are indices
+// into the snapshot's lights - the scene's visible lights, in the scene's order.
+void MainWindow::showShadowBudget(const std::vector<int>& lights) {
+    if (lights.empty()) return;
+    std::vector<QString> visible;
+    for (const rf::Light& l : builder_->graph().lights)
+        if (rf::effectivelyVisible(builder_->graph(), l)) visible.push_back(QString::fromStdString(l.name));
+    QStringList names;
+    for (int k : lights)
+        if (k >= 0 && k < int(visible.size())) names << QString("«%1»").arg(visible[size_t(k)]);
+    statusBar()->showMessage(QString("Тени рисуются не больше чем от %1 источников сразу: сейчас без тени %2 — они "
+                                     "дальше и тусклее остальных. Каждая тень — лишний проход рендера каждый кадр")
+                                 .arg(Viewport::kMaxShadowLights)
+                                 .arg(names.join(", ")),
+                             12000);
 }
 
 // Вид -> Камеры: the editor's own view, then every camera of the scene; the one looked through is ticked.

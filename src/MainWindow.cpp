@@ -86,6 +86,7 @@ MainWindow::MainWindow() {
     buildEditMenu();
     buildControlsMenu();
     buildCamerasMenu();
+    buildCameraPicker();
     buildPlayExtras();
     connectViewportControls();
     setExpertMode(false);   // a beginner's screen: the builder and a big 3D view
@@ -888,6 +889,7 @@ void MainWindow::connectSceneBuilder() {
     });
     connect(builder_, &SceneBuilder::sceneMarkers, view_, &Viewport::setSceneMarkers);
     connect(builder_, &SceneBuilder::cameraView, view_, &Viewport::setLookThrough);
+    connect(view_, &Viewport::shadowsLeftOut, this, &MainWindow::showShadowBudget);
     connect(view_, &Viewport::lookThroughMoved, builder_, &SceneBuilder::onViewMovedThroughCamera);
     builder_->setViewEye([this] {
         const QVector3D e = view_->camera().eye();

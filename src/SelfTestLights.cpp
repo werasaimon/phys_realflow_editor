@@ -5,9 +5,11 @@
 // the software renderer, seen through a scene camera); through a camera the view matrix is the
 // camera's frame, moving the view moves the camera, Esc gives the editor's view back; play and stop
 // keep the lights, and a light edited while playing reaches the next frame. Each check prints one
-// line; with a directory, the pictures lights-edit.png, lights-lit.png and camera-through.png.
+// line; with a directory, the pictures lights-edit.png, lights-lit.png and camera-through.png. The
+// "Смотрю через:" list in the view's corner names the camera and switches to it (testCameraPicker).
 #include "SelfTestSupport.h"
 
+#include <QComboBox>
 #include <QImage>
 
 #include <algorithm>
@@ -18,44 +20,10 @@ using namespace selftest;
 
 namespace {
 
-const Light* lightOf(const SceneBuilder& b, uint32_t id) {
-    for (const Light& l : b.graph().lights)
-        if (l.id == id) return &l;
-    return nullptr;
-}
-
 const Camera* cameraOf(const SceneBuilder& b, uint32_t id) {
     for (const Camera& c : b.graph().cameras)
         if (c.id == id) return &c;
     return nullptr;
-}
-
-// The id of what the last "create" made (the builder selects it).
-uint32_t made(SceneBuilder& b, QAction* action) {
-    b.select(0);
-    action->trigger();
-    pump(60);
-    return b.selectedId();
-}
-
-// A light's turn that makes it shine along `dir` (it shines along its -y).
-Vector3 shining(const Vector3& dir) { return eulerDegrees(Quaternion::fromTwoVectors(Vector3(0, -1, 0), normalize(dir))); }
-
-// The mean brightness (0..255) of the 7 x 7 pixels of the view's picture around a point in the world.
-float brightnessAt(Viewport* v, const QImage& image, const Vector3& p) {
-    const Vector2 s = v->gizmoView().project(p);
-    const float k = float(image.width()) / float(std::max(1, v->width()));
-    const int cx = int(s.x * k), cy = int(s.y * k);
-    float sum = 0;
-    int n = 0;
-    for (int y = cy - 3; y <= cy + 3; ++y)
-        for (int x = cx - 3; x <= cx + 3; ++x) {
-            if (x < 0 || y < 0 || x >= image.width() || y >= image.height()) continue;
-            const QColor c = image.pixelColor(x, y);
-            sum += 0.299f * float(c.red()) + 0.587f * float(c.green()) + 0.114f * float(c.blue());
-            ++n;
-        }
-    return n ? sum / float(n) : 0.0f;
 }
 
 void testCreateAndPick(Checker& c, QMainWindow& w, SceneBuilder& b, Viewport* v) {
@@ -175,6 +143,8 @@ void testSpotTurnedByGizmo(Checker& c, SceneBuilder& b, Viewport* v) {
     b.lookThrough(0);
 }
 
+void testCameraPicker(Checker& c, SceneBuilder& b, Viewport* v, uint32_t cam);
+
 void testLookThrough(Checker& c, QMainWindow& w, SceneBuilder& b, Viewport* v) {
     b.newScene();
     made(b, b.createActions()[0]);
@@ -214,6 +184,27 @@ void testLookThrough(Checker& c, QMainWindow& w, SceneBuilder& b, Viewport* v) {
     float diff = 0;
     for (int i = 0; i < 16; ++i) diff = std::max(diff, std::fabs(back.constData()[i] - editorView.constData()[i]));
     c.check(!v->lookingThrough() && b.lookingThrough() == 0 && diff < 1e-5f, "Esc gives the editor's own view back");
+    testCameraPicker(c, b, v, cam);
+}
+
+// "Смотрю через:" in the corner of the view: it lists the camera, a pick there looks through it,
+// and when the view goes back another way (here: the builder, as the menu or Esc do) it follows.
+void testCameraPicker(Checker& c, SceneBuilder& b, Viewport* v, uint32_t cam) {
+    auto* list = v->findChild<QComboBox*>("cameraPickerList");
+    const int row = list ? list->findData(cam) : -1;
+    const bool listed = row > 0 && list->currentData().toUInt() == 0;
+    if (row > 0) {
+        list->setCurrentIndex(row);
+        emit list->activated(row); // what a click on that line does
+    }
+    pump(100);
+    const bool picked = b.lookingThrough() == cam && v->lookingThrough();
+    b.lookThrough(0);
+    pump(100);
+    const bool followed = list && list->currentData().toUInt() == 0 && list->currentText() == "Вид редактора";
+    std::printf("  the corner list: camera listed %s, picked through the list %s, follows the way back %s\n",
+                listed ? "yes" : "no", picked ? "yes" : "no", followed ? "yes" : "no");
+    c.check(listed && picked && followed, "the corner list names the camera, switches to it, and follows the way back");
 }
 
 void testPlayKeepsLights(Checker& c, SceneBuilder& b, Viewport* v) {
