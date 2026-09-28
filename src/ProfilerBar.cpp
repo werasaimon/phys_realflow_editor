@@ -34,12 +34,19 @@ const std::vector<Part>& parts() {
 }
 
 // "rigid/solve ms" -> «решатель»: the stage's name in words (the channel itself when it is new).
+// The scene's own stages ("scene/coupling ms", "scene/controllers ms") belong to no solver: they
+// go to «Прочее» (partOf), under their words here.
 QString stageName(const std::string& channel) {
     static const std::map<std::string, QString> names = {
-        {"collide", "столкновения"}, {"solve", "решатель"},      {"integrate", "интегрирование"}, {"ccd", "непрерывные столкн."},
-        {"neighbors", "соседи"},     {"density", "плотность"},   {"contacts", "контакты"},        {"cloth", "ткань"},
-        {"advect", "перенос"},       {"diffuse", "вязкость"},    {"forces", "силы"},              {"heat", "тепло"},
-        {"mhd", "МГД"},              {"pressure", "давление"},   {"solids", "тела в газе"}};
+        {"collide", "столкновения"},   {"solve", "решатель"},        {"integrate", "интегрирование"},
+        {"ccd", "непрерывные столкн."}, {"islands", "острова сна"},   {"debug draw", "отладочная графика"},
+        {"neighbors", "соседи"},       {"density", "плотность"},     {"contacts", "контакты"},
+        {"cloth", "ткань"},            {"emit", "испускание"},       {"predict", "прогноз положений"},
+        {"bodies", "связь с телами"},  {"velocity", "скорости"},     {"heat", "тепло"},
+        {"advect", "перенос"},         {"diffuse", "вязкость"},      {"forces", "силы"},
+        {"mhd", "МГД"},                {"pressure", "давление"},     {"solids", "тела в газе"},
+        {"sources", "источники"},      {"diagnostics", "диагностика"}, {"surface loads", "нагрузки на поверхность"},
+        {"coupling", "связь частей сцены"}, {"controllers", "управление сценой"}};
     std::string word = channel.substr(channel.find('/') + 1);
     if (word.size() > 3 && word.compare(word.size() - 3, 3, " ms") == 0) word.resize(word.size() - 3);
     const auto it = names.find(word);

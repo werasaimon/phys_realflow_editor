@@ -3,9 +3,10 @@
 // list of named numbers, each with its unit, as PhysX PVD's property view shows an object.
 //
 // Every number answers a right click with «Построить график». When the engine reports that quantity
-// as a Probe channel the menu adds it to the plots at the bottom (the plotRequested signal); a quantity
-// of one object only (the mass of this body, the depth of this contact) has no channel yet, so the menu
-// says, greyed out, that it comes in part 2 - never a button that silently does nothing.
+// as a channel - the scene's, or this body's own («Куб/height»: the SDK measures a clicked body) - the
+// menu adds it to the plots at the bottom (the plotRequested signal); a number with no channel (a
+// vector, the depth of one contact) keeps the item greyed out and says which numbers have one -
+// never a button that silently does nothing.
 #include <QFrame>
 #include <QString>
 

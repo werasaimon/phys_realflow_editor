@@ -21,12 +21,12 @@ set(RF_SDK_DIR "${CMAKE_CURRENT_SOURCE_DIR}/extern/phys_realflow" CACHE PATH
     "The PhysRealFlow SDK source tree (the submodule, or a local checkout while developing)")
 add_subdirectory(${RF_SDK_DIR} phys_realflow)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets Charts)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGL OpenGLWidgets)
 qt_standard_project_setup()
 
 qt_add_executable(realflow WIN32
   src/main.cpp
-  src/MainWindow.h      src/MainWindow.cpp src/MainWindowStart.cpp src/MainWindowControls.cpp src/MainWindowToolbar.cpp src/MainWindowPlay.cpp src/MainWindowLab.cpp
+  src/MainWindow.h      src/MainWindow.cpp src/MainWindowStart.cpp src/MainWindowControls.cpp src/MainWindowToolbar.cpp src/MainWindowPlay.cpp src/MainWindowLab.cpp src/MainWindowPlots.cpp
   src/FirstStartHint.h  src/FirstStartHint.cpp
   src/ExamplesGallery.h src/ExamplesGallery.cpp
   src/Viewport.h        src/Viewport.cpp src/ViewportInput.cpp src/ViewportLights.cpp src/ViewportShadows.cpp src/ViewportPlay.cpp src/ViewportLab.cpp
@@ -40,6 +40,10 @@ qt_add_executable(realflow WIN32
   src/ViewportTools.h   src/ViewportTools.cpp
   src/FluidSurfaceRenderer.h src/FluidSurfaceRenderer.cpp
   src/PlotPanel.h       src/PlotPanel.cpp
+  src/PlotChannels.h    src/PlotChannels.cpp
+  src/TrackChart.h      src/TrackChart.cpp
+  src/ChannelList.h     src/ChannelList.cpp
+  src/PlotSeries.h      src/PlotSeries.cpp
   src/Gizmo.h           src/Gizmo.cpp
   src/ControlScheme.h   src/ControlScheme.cpp
   src/EditView.h        src/EditView.cpp
@@ -62,10 +66,10 @@ qt_add_executable(realflow WIN32
   src/InspectorWidgets.h src/InspectorWidgets.cpp
   src/RoleBar.h         src/RoleBar.cpp
   src/Icons.h           src/Icons.cpp
-  src/SelfTest.h        src/SelfTest.cpp  src/SelfTestSupport.h src/SelfTestComponents.cpp src/SelfTestControls.cpp src/SelfTestMany.cpp src/SelfTestLights.cpp src/SelfTestShadows.cpp src/SelfTestPlay.cpp src/SelfTestLab.cpp
+  src/SelfTest.h        src/SelfTest.cpp  src/SelfTestSupport.h src/SelfTestComponents.cpp src/SelfTestControls.cpp src/SelfTestMany.cpp src/SelfTestLights.cpp src/SelfTestShadows.cpp src/SelfTestPlay.cpp src/SelfTestLab.cpp src/SelfTestPlots.cpp
 )
 target_link_libraries(realflow PRIVATE rfcore rfsamples
-  Qt6::Core Qt6::Gui Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets Qt6::Charts)
+  Qt6::Core Qt6::Gui Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets)
 # "Открыть…" of the scene builder starts in examples/ of this source tree.
 target_compile_definitions(realflow PRIVATE RF_EDITOR_EXAMPLES="${CMAKE_CURRENT_SOURCE_DIR}/examples")
 if(MSVC)

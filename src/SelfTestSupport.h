@@ -141,3 +141,6 @@ int runShadowTests(QMainWindow& w, SceneBuilder& b, Viewport* v, const QString& 
 // The Laboratory: F8, the layers and presets, the card of a clicked contact or body, the timeline,
 // the profiler (SelfTestLab.cpp).
 int runLabTests(QMainWindow& w, SceneBuilder& b, Viewport* v, const QString& shotsDir);
+// The plots: the default track, the picker, the three arrangements, the colours, the Laboratory's
+// cursor both ways, a body's own channels, a long history painted quickly (SelfTestPlots.cpp).
+int runPlotTests(QMainWindow& w, SceneBuilder& b, Viewport* v, const QString& shotsDir);

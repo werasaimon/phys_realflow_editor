@@ -104,6 +104,7 @@ void MainWindow::setLaboratoryVisible(bool on) {
     labDock_->setVisible(on);
     if (on) labDock_->raise();
     view_->setLabInspect(on);
+    updateChannelRequests(); // the scene's energy and momentum are measured while the Laboratory is open
     if (!on) view_->setLabMarker(false);
     lab_->syncFromProbe();
     updateLabTimeline();
@@ -170,7 +171,8 @@ void MainWindow::labWentLive() {
 void MainWindow::labPlot(const QString& channel) {
     plots_->showChannel(channel.toStdString());
     setGraphsVisible(true);
-    statusBar()->showMessage("График «" + channel + "» — внизу, в «Графиках» (F9)", 4000);
+    const QString name = plots_->catalog().card(channel.toStdString()).name;
+    statusBar()->showMessage("График «" + name + "» — внизу, в «Графиках» (F9)", 4000);
 }
 
 // 1. The contact nearest to the click on the screen, if within 10 px. 2. Else the body under it.
@@ -225,6 +227,7 @@ void MainWindow::showBodyCard(int body) {
     const auto s = view_->snapshot();
     LabBodyFacts f;
     f.body = body;
+    f.label = watchLabel(body).toStdString();
     if (s && body < int(s->bodies.size())) {
         f.pos = s->bodies[size_t(body)].pos;
         f.sleeping = s->bodies[size_t(body)].sleeping;
@@ -233,15 +236,20 @@ void MainWindow::showBodyCard(int body) {
     fillBodyCard(f);
     view_->setLabMarker(true, f.pos);
     if (timeline_->showingPast() || builder_->editing()) return; // a kept frame: nothing live to ask
-    ctrl_->post([this, body](rf::Simulation& sim) {
+    watchBody(body); // its channels from the next frame on: the card's numbers can be plotted
+    const rf::ObjectRef ref{rf::ObjectRef::Kind::Body, body, f.label};
+    ctrl_->post([this, body, ref](rf::Simulation& sim) {
         LabBodyFacts live;
         live.body = body;
         live.live = true;
+        live.label = ref.label;
         if (body >= 0 && body < int(sim.rigid.bodies().size())) {
             const rf::RigidBody& b = sim.rigid.bodies()[size_t(body)];
             live.alive = b.alive, live.fixed = b.invMass == 0, live.sleeping = b.sleeping, live.sleepIsland = b.sleepIsland;
             live.mass = b.mass, live.pos = b.pos, live.vel = b.vel, live.angVel = b.angVel;
             for (int k = 0; k < 3; ++k) live.inertia[k] = b.invInertiaLocal[k] > 0 ? 1.0f / b.invInertiaLocal[k] : 0.0f;
+            for (const rf::Measurement& m : rf::measureObject(sim, ref)) // the height as the plot will show it
+                if (m.info.id == ref.label + "/height") live.height = float(m.value);
         }
         QMetaObject::invokeMethod(this, [this, live] { fillBodyCard(live); }, Qt::QueuedConnection);
     });
@@ -253,13 +261,18 @@ void MainWindow::fillBodyCard(const LabBodyFacts& f) {
                                      : QString("не спит");
     std::vector<LabCard::Row> rows;
     if (f.live && !f.alive) rows.push_back({"Состояние", "удалено", "", ""});
-    rows.push_back({"Масса", f.live ? (f.fixed ? QString("∞ (неподвижное)") : num(f.mass, 3)) : dash, f.live && !f.fixed ? "кг" : "", ""});
+    // A number the SDK measures for one object is plotted from its channel, «<label>/<quantity>».
+    auto channel = [&f](const char* quantity) { return f.label + "/" + quantity; };
+    rows.push_back({"Масса", f.live ? (f.fixed ? QString("∞ (неподвижное)") : num(f.mass, 3)) : dash, f.live && !f.fixed ? "кг" : "",
+                    channel("mass")});
     rows.push_back({"Моменты инерции", f.live && !f.fixed ? vec(f.inertia, 4) : (f.live ? QString("∞") : dash), f.live && !f.fixed ? "кг·м²" : "", ""});
     rows.push_back({"Скорость", f.live ? vec(f.vel, 3) : dash, f.live ? "м/с" : "", ""});
-    rows.push_back({"|v|", f.live ? num(rf::length(f.vel), 3) : dash, f.live ? "м/с" : "", ""});
+    rows.push_back({"|v|", f.live ? num(rf::length(f.vel), 3) : dash, f.live ? "м/с" : "", channel("speed")});
     rows.push_back({"Угловая скорость", f.live ? vec(f.angVel, 3) : dash, f.live ? "рад/с" : "", ""});
+    rows.push_back({"|ω|", f.live ? num(rf::length(f.angVel), 3) : dash, f.live ? "рад/с" : "", channel("angular speed")});
     rows.push_back({"Где", vec(f.pos, 3), "м", ""});
-    rows.push_back({"Сон", sleep, "", ""});
+    rows.push_back({"Высота над дном сцены", f.live && std::isfinite(f.height) ? num(f.height, 3) : dash, f.live ? "м" : "", channel("height")});
+    rows.push_back({"Сон", sleep, "", channel("asleep")});
     const auto s = view_->snapshot();
     if (s) {
         rows.push_back({"Энергия движения всех тел", num(s->probe.value("rigid/kinetic energy J", 0.0), 3), "Дж", "rigid/kinetic energy J"});

@@ -1,315 +1,774 @@
-// The plots at the bottom of the window (see PlotPanel.h): one small chart per quantity, filled
-// from the Probe's channels and the scene's own plots every frame; the "Каналы" menu picks which are
-// drawn, the history of every channel is kept so that a chart switched on later is full at once,
-// and writeCsv() saves all of them.
+// The plots at the bottom of the window (see PlotPanel.h): the recording, the charts that come by
+// themselves, what the reader may change on them, the hover, the cursor and the CSV.
 #include "PlotPanel.h"
 
-#include <QAction>
-#include <QCursor>
+#include <QActionGroup>
+#include <QApplication>
+#include <QButtonGroup>
+#include <QClipboard>
 #include <QFile>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMenu>
+#include <QScrollArea>
 #include <QTextStream>
+#include <QTimer>
 #include <QToolButton>
 #include <QToolTip>
 #include <QVBoxLayout>
-#include <QtCharts/QChart>
-#include <QtCharts/QChartView>
-#include <QtCharts/QLineSeries>
-#include <QtCharts/QValueAxis>
 
 #include <algorithm>
-#include <cmath>
+#include <functional>
 
 namespace {
-// Categorical slots (dark-surface steps), assigned in fixed order, never cycled by rank.
-const QColor kSeries[] = {QColor("#3987e5"), QColor("#d95926"), QColor("#199e70"), QColor("#c98500"),
-                          QColor("#8e6ad6"), QColor("#2aa7b8")};
-const QColor kSurface(28, 30, 35);
-const QColor kGrid(52, 56, 64);
-const QColor kAxisText(150, 157, 170);
-const QColor kInk(225, 228, 235);
-constexpr int kMaxPoints = 6000;
 
-// THE one place where a scene's first chart is chosen, when the scene has no plots of its own: the
-// first of these channels the engine reports wins. Physical quantities only - the frame time is an
-// engine internal and never the default. The SDK is adding «полная энергия сцены»: its channel name
-// goes to the front of this list, and nothing else has to change.
+constexpr double kLiveSeconds = 60.0; // a longer run shows its last minute, sliding
+
+// THE one place where the first chart is chosen: the scene's energy, its three lines in this order -
+// of motion, of height, and their sum (the mechanical energy the SDK measures while the plots or
+// the Laboratory are open).
 const std::vector<std::string>& defaultChannels() {
-    static const std::vector<std::string> channels = {"rigid/kinetic energy J", "mhd/energy", "gas/max speed",
-                                                      "particles/density error %"};
+    static const std::vector<std::string> channels = {"scene/kinetic energy", "scene/potential energy", "scene/mechanical energy"};
     return channels;
 }
 
-QString formatValue(double v) {
-    double a = std::fabs(v);
-    if (a != 0 && (a < 1e-3 || a >= 1e5)) return QString::number(v, 'e', 3);
-    return QString::number(v, 'g', 4);
+std::vector<PlotPanel::Chart> defaultCharts() {
+    return {{"Энергия сцены — движения, высоты, полная (Дж)", defaultChannels(), {}, false}};
 }
+
+// The selected object's two charts: how high it is and how fast it moves.
+std::vector<PlotPanel::Chart> objectCharts(const QString& label) {
+    const std::string l = label.toStdString();
+    return {{"Высота, м", {l + "/height"}, {}, true}, {"Скорость, м/с", {l + "/speed"}, {}, true}};
+}
+
+QString formatValue(double v) { return numberText(v, 4); }
+
+void eraseId(std::vector<std::string>& ids, const std::string& id) { ids.erase(std::remove(ids.begin(), ids.end(), id), ids.end()); }
+
+bool contains(const std::vector<std::string>& ids, const std::string& id) { return std::find(ids.begin(), ids.end(), id) != ids.end(); }
+
 } // namespace
 
-// ---------------------------------------------------------------------------
-TimeSeriesChart::TimeSeriesChart(const QString& name, const QColor& color, QWidget* parent)
-    : QWidget(parent), name_(name) {
+PlotPanel::PlotPanel(QWidget* parent) : QWidget(parent) {
+    setObjectName("plotPanel");
     auto* col = new QVBoxLayout(this);
     col->setContentsMargins(0, 0, 0, 0);
     col->setSpacing(0);
 
-    title_ = new QLabel;
-    title_->setStyleSheet(QString("color: %1; font-weight: 600; padding: 4px 8px;").arg(kInk.name()));
-    col->addWidget(title_);
-
-    chart_ = new QChart;
-    chart_->setBackgroundBrush(kSurface);
-    chart_->setBackgroundRoundness(0);
-    chart_->setMargins(QMargins(2, 2, 6, 2));
-    chart_->legend()->hide(); // single series: the title names it
-    series_ = new QLineSeries;
-    QPen pen(color, 2);
-    pen.setCapStyle(Qt::RoundCap);
-    series_->setPen(pen);
-    chart_->addSeries(series_);
-
-    auto styleAxis = [](QValueAxis* a) {
-        a->setLabelsColor(kAxisText);
-        a->setGridLineColor(kGrid);
-        a->setLinePenColor(kGrid);
-        a->setMinorGridLineVisible(false);
-        QFont f = a->labelsFont();
-        f.setPointSizeF(8);
-        a->setLabelsFont(f);
-    };
-    ax_ = new QValueAxis;
-    ax_->setTitleText("t, с");
-    ax_->setTitleBrush(kAxisText);
-    ax_->setLabelFormat("%.2g");
-    ax_->setTickCount(5);
-    styleAxis(ax_);
-    ay_ = new QValueAxis;
-    ay_->setLabelFormat("%.3g");
-    ay_->setTickCount(5);
-    styleAxis(ay_);
-    chart_->addAxis(ax_, Qt::AlignBottom);
-    chart_->addAxis(ay_, Qt::AlignLeft);
-    series_->attachAxis(ax_);
-    series_->attachAxis(ay_);
-
-    view_ = new QChartView(chart_);
-    view_->setRenderHint(QPainter::Antialiasing);
-    view_->setMinimumSize(260, 150);
-    col->addWidget(view_, 1);
-
-    // Hover: exact value at the nearest sample.
-    connect(series_, &QLineSeries::hovered, this, [this](const QPointF& p, bool state) {
-        if (!state) { QToolTip::hideText(); return; }
-        QToolTip::showText(QCursor::pos(), QString("%1\nt = %2 с\n%3").arg(name_, formatValue(p.x()), formatValue(p.y())));
-    });
-    title_->setText(name_);
-}
-
-void TimeSeriesChart::append(double t, double v) {
-    if (!std::isfinite(v)) return;
-    points_.append(QPointF(t, v));
-    if (points_.size() > kMaxPoints) points_.remove(0, points_.size() - kMaxPoints);
-    series_->append(t, v);
-    if (series_->count() > kMaxPoints) series_->removePoints(0, series_->count() - kMaxPoints);
-    title_->setText(QString("%1  <span style='color:#9aa3b2;font-weight:400'>·  %2</span>").arg(name_, formatValue(v)));
-    if (++sinceAxisUpdate_ >= 5 || points_.size() < 10) updateAxes();
-}
-
-void TimeSeriesChart::updateAxes() {
-    sinceAxisUpdate_ = 0;
-    if (points_.isEmpty()) return;
-    double t0 = points_.front().x(), t1 = points_.back().x();
-    double y0 = points_.front().y(), y1 = y0;
-    for (const QPointF& p : points_) {
-        y0 = std::min(y0, p.y());
-        y1 = std::max(y1, p.y());
-    }
-    if (t1 <= t0) t1 = t0 + 1e-3;
-    double pad = std::max((y1 - y0) * 0.1, std::max(std::fabs(y1), 1e-9) * 0.02);
-    ax_->setRange(t0, t1);
-    ay_->setRange(y0 - pad, y1 + pad);
-}
-
-void TimeSeriesChart::clear() {
-    points_.clear();
-    series_->clear();
-    title_->setText(name_);
-}
-
-// ---------------------------------------------------------------------------
-PlotPanel::PlotPanel(QWidget* parent) : QWidget(parent) {
-    row_ = new QHBoxLayout(this);
-    row_->setContentsMargins(0, 0, 0, 0);
-    row_->setSpacing(6);
-    // Never a dead area: while nothing is drawn it says how to fill it (showHint).
-    placeholder_ = new QLabel;
-    placeholder_->setWordWrap(true);
+    // Before the first frame: one quiet line, nothing to press.
+    placeholder_ = new QLabel("Графики появятся после ▶");
+    placeholder_->setObjectName("plotPlaceholder");
     placeholder_->setAlignment(Qt::AlignCenter);
     placeholder_->setStyleSheet("color: #8a93a3;");
-    row_->addWidget(placeholder_);
-    showHint();
+    col->addWidget(placeholder_, 1);
 
-    // The chooser lives in the results dock's button bar (channelButton()); its menu lists every
-    // quantity the engine has reported, checked ones are drawn.
-    channelBtn_ = new QToolButton;
-    channelBtn_->setText("Каналы…");
-    channelBtn_->setToolTip("Какие величины рисовать: всё, что решатели сообщили отладчику (Probe), по имени");
-    channelBtn_->setPopupMode(QToolButton::InstantPopup);
-    channelMenu_ = new QMenu(channelBtn_);
-    channelBtn_->setMenu(channelMenu_);
+    // The charts scroll: many of them never squeeze below a readable size.
+    scroll_ = new QScrollArea;
+    scroll_->setObjectName("plotScroll");
+    scroll_->setWidgetResizable(true);
+    scroll_->setFrameShape(QFrame::NoFrame);
+    col->addWidget(scroll_, 1);
+
+    checklist_ = new ChannelList(ChannelList::Mode::Checklist, this);
+    connect(checklist_, &ChannelList::toggled, this, [this](std::string id, bool on) { setChannelShown(id, on); });
+    connect(checklist_, &ChannelList::presetChosen, this, &PlotPanel::applyPreset);
+    chartList_ = new ChannelList(ChannelList::Mode::Chart, this);
+    connect(chartList_, &ChannelList::chosen, this, [this](std::string id) { switchChart(listChart_, id); });
+    connect(chartList_, &ChannelList::toggled, this, [this](std::string id, bool on) { setOnChart(listChart_, id, on); });
+    buildBar();
+
+    // The frames come 60 times a second; the charts repaint at most 25 times a second.
+    repaint_ = new QTimer(this);
+    repaint_->setSingleShot(true);
+    repaint_->setInterval(40);
+    connect(repaint_, &QTimer::timeout, this, &PlotPanel::refreshCharts);
+    for (const std::string& id : defaultChannels()) catalog_.pin(id); // blue, orange, green: always the same
+    charts_ = defaultCharts();
+    rebuildCharts();
 }
 
-QWidget* PlotPanel::channelButton() const { return channelBtn_; }
+// Under the charts, quiet: «Ещё величины…» (every quantity, with checkboxes) and the layout switch -
+// «Наложить | Дорожками | Нормировать», a segmented control, always one pressed.
+void PlotPanel::buildBar() {
+    more_ = new QToolButton;
+    more_->setObjectName("plotMore");
+    more_->setText("Ещё величины…");
+    more_->setToolTip("Все величины, которые считает движок, с галочками — для тех, кому нужно всё");
+    connect(more_, &QToolButton::clicked, this, [this] {
+        checklist_->setRows(rowsFor(-1));
+        checklist_->popupAt(more_, more_->rect());
+    });
+    switch_ = new QWidget;
+    switch_->setObjectName("plotLayoutSwitch");
+    auto* row = new QHBoxLayout(switch_);
+    row->setContentsMargins(0, 0, 0, 0);
+    row->setSpacing(0);
+    switchGroup_ = new QButtonGroup(this);
+    const std::pair<const char*, const char*> choices[] = {{"overlay", "Наложить"}, {"lanes", "Дорожками"}, {"normalized", "Нормировать"}};
+    for (int i = 0; i < 3; ++i) {
+        auto* b = new QToolButton;
+        b->setObjectName(QString("plotLayout_") + choices[i].first);
+        b->setText(choices[i].second);
+        b->setCheckable(true);
+        b->setChecked(i == int(arrangement_));
+        switchGroup_->addButton(b, i);
+        row->addWidget(b);
+    }
+    switchGroup_->button(0)->setToolTip("Графики рядом; на каждом — линии одной единицы");
+    switchGroup_->button(1)->setToolTip("Графики друг под другом, с общей осью времени");
+    switchGroup_->button(2)->setToolTip("Все линии на одном графике, каждая от 0 до 1: форма, не величина");
+    const QString quiet = "QToolButton { color: #aab1bd; border: 1px solid #353a43; padding: 2px 8px; background: transparent; }"
+                          "QToolButton:hover { background: #2f3540; }"
+                          "QToolButton:checked { color: white; background: #2a3a52; border-color: #3d5a80; }";
+    switch_->setStyleSheet(quiet + "QToolButton#plotLayout_overlay { border-top-left-radius: 5px; border-bottom-left-radius: 5px; }"
+                                   "QToolButton#plotLayout_normalized { border-top-right-radius: 5px; border-bottom-right-radius: 5px; }");
+    more_->setStyleSheet("QToolButton { color: #aab1bd; border: none; padding: 2px 6px; } QToolButton:hover { color: white; }");
+    connect(switchGroup_, &QButtonGroup::idClicked, this, [this](int id) { setArrangement(Arrangement(id)); });
+}
+
+QWidget* PlotPanel::moreButton() const { return more_; }
+
+void PlotPanel::setArrangement(Arrangement a) {
+    arrangement_ = a;
+    if (QAbstractButton* b = switchGroup_->button(int(a))) b->setChecked(true);
+    rebuildCharts();
+}
+
+void PlotPanel::setWholeRun(bool on) {
+    wholeRun_ = on;
+    refreshCharts();
+}
+
+// --- The recording --------------------------------------------------------------------------------
 
 void PlotPanel::setScene(const std::string& name) {
-    if (!scene_.empty()) selectionByScene_[scene_] = selected_;
+    std::vector<Chart> own;
+    for (const Chart& c : charts_)
+        if (!c.object) own.push_back(c);
+    if (!scene_.empty() && touched_) chartsByScene_[scene_] = own;
     scene_ = name;
+    const auto it = chartsByScene_.find(name);
+    touched_ = it != chartsByScene_.end();
+    charts_ = touched_ ? it->second : defaultCharts();
+    object_.clear(); // the object's section goes with the old scene
     clear();
-    auto it = selectionByScene_.find(name);
-    selected_ = it != selectionByScene_.end() ? it->second : std::set<std::string>();
-    menuNames_.clear(); // the menu is rebuilt from the first frame of the new scene
 }
 
-void PlotPanel::append(double t, const std::vector<std::pair<std::string, float>>& plots, const rf::Probe::Snapshot& probe) {
-    times_.push_back(t);
-    // Record everything: the scene's plots and every probe channel.
+// One frame:
+//   1. the SDK's name cards of this frame's measurements are learnt (an object's channels come so);
+//   2. every value is recorded - the solvers' readings, the Probe's channels, the measurements - and
+//      the scene's energy in its two parts (addEnergyParts); a channel the SDK measures is taken from
+//      the measurements only (the Probe may still hold its value from an earlier scene);
+//   3. a channel that was not in this frame gets a gap, so its line breaks instead of lying;
+//   4. a new channel: the history's bounds, the charts waiting for it, the lists follow;
+//   5. the charts repaint soon (at most 25 times a second).
+void PlotPanel::append(double t, const std::vector<std::pair<std::string, float>>& plots, const std::vector<rf::Probe::Channel>& probe,
+                       const std::vector<rf::Measurement>& measurements) {
+    catalog_.learn(measurements);
+    if (frames_++ == 0) start_ = t, showHint();
+    now_ = t;
+    reported_.clear();
     plotNames_.clear();
-    auto record = [&](const std::string& name, double v) {
-        auto& h = history_[name];
-        h.resize(times_.size() - 1, std::nan(""));
-        h.push_back(v);
-    };
     for (const auto& [name, v] : plots) {
         plotNames_.push_back(name);
-        record(name, v);
+        record(t, name, v);
     }
-    for (const rf::Probe::Channel& c : probe.channels) record(c.name, c.value);
-
-    // The menu: rebuilt when a new quantity appears. A first frame with nothing selected picks
-    // the scene's own plots, else the first default channel it has (defaultChannels above).
-    std::vector<std::string> names;
-    names.reserve(history_.size());
-    for (const auto& [name, h] : history_) names.push_back(name);
-    if (names != menuNames_) {
-        if (selected_.empty()) {
-            for (const std::string& n : plotNames_) selected_.insert(n);
-            for (const std::string& n : defaultChannels())
-                if (selected_.empty() && history_.count(n)) selected_.insert(n);
-        }
-        rebuildMenu(names);
-        applySelection();
+    for (const rf::Probe::Channel& c : probe)
+        if (!catalog_.measuredBySdk(c.name)) record(t, c.name, c.value);
+    for (const rf::Measurement& m : measurements) record(t, m.info.id, m.value);
+    addEnergyParts(t, measurements);
+    for (auto& [id, s] : series_)
+        if (!reported_.count(id)) s.add(t, std::nan(""));
+    if (fresh_) {
+        fresh_ = false;
+        updateKeep();
+        rebuildCharts(); // a chart waiting for this channel gets its line
+        refreshLists();
     }
-    if (history_.empty()) return;
-    showHint();
-    for (auto& [name, chart] : charts_) {
-        const auto& h = history_[name];
-        if (!h.empty() && h.size() == times_.size()) chart->append(t, h.back());
-    }
+    if (!repaint_->isActive()) repaint_->start();
 }
 
-void PlotPanel::rebuildMenu(const std::vector<std::string>& names) {
-    menuNames_ = names;
-    channelMenu_->clear();
-    std::string group;
-    for (const std::string& name : names) {
-        // Names are "part/quantity": a separator between the parts keeps the long list readable.
-        const std::string part = name.substr(0, name.find('/'));
-        if (part != group && !group.empty()) channelMenu_->addSeparator();
-        group = part;
-        auto* act = channelMenu_->addAction(QString::fromStdString(name));
-        act->setCheckable(true);
-        act->setChecked(selected_.count(name) > 0);
-        connect(act, &QAction::toggled, this, [this, name](bool on) {
-            if (on) selected_.insert(name);
-            else selected_.erase(name);
-            applySelection();
-        });
+void PlotPanel::record(double t, const std::string& id, double v) {
+    auto [it, added] = series_.try_emplace(id);
+    if (added) fresh_ = true, it->second.setKeep(kept(id));
+    it->second.add(t, v);
+    reported_.insert(id);
+}
+
+// The scene's energy in the two parts the first chart shows (the SDK measures their sum): of motion
+// - the bodies' translation and rotation, the particles, the gas - and of height - the bodies and
+// the particles. Added exactly as the SDK adds the total (scene/Channels.cpp), so the three agree.
+void PlotPanel::addEnergyParts(double t, const std::vector<rf::Measurement>& measurements) {
+    static const std::set<std::string> motion = {"rigid/kinetic energy", "rigid/rotational energy", "particles/kinetic energy",
+                                                 "gas/kinetic energy"};
+    static const std::set<std::string> height = {"rigid/potential energy", "particles/potential energy"};
+    double kinetic = 0, potential = 0;
+    bool total = false;
+    for (const rf::Measurement& m : measurements) {
+        if (motion.count(m.info.id)) kinetic += m.value;
+        if (height.count(m.info.id)) potential += m.value;
+        total = total || m.info.id == "scene/mechanical energy";
     }
-    channelBtn_->setText(QString("Каналы (%1 из %2)").arg(selected_.size()).arg(names.size()));
+    if (!total) return;
+    record(t, "scene/kinetic energy", kinetic);
+    record(t, "scene/potential energy", potential);
 }
 
-QColor PlotPanel::nextColor() {
-    return kSeries[colorsUsed_++ % (sizeof(kSeries) / sizeof(kSeries[0]))];
+// Which channels keep the whole run: the lines on the charts (the selected object's among them), the
+// scene's energy, and everything for the automation's CSV.
+bool PlotPanel::kept(const std::string& id) const {
+    if (keepAll_ || contains(defaultChannels(), id)) return true;
+    return std::any_of(charts_.begin(), charts_.end(), [&](const Chart& c) { return contains(c.ids, id); });
 }
 
-void PlotPanel::fillFromHistory(TimeSeriesChart* chart, const std::string& name) {
-    const auto& h = history_[name];
-    for (size_t i = 0; i < h.size() && i < times_.size(); ++i)
-        if (std::isfinite(h[i])) chart->append(times_[i], h[i]);
+void PlotPanel::updateKeep() {
+    for (auto& [id, s] : series_) s.setKeep(kept(id));
 }
 
-void PlotPanel::showChannel(const std::string& name) {
-    selected_.insert(name);
-    rebuildMenu(menuNames_); // the menu's tick follows
-    applySelection();
+void PlotPanel::setKeepEverything(bool on) {
+    keepAll_ = on;
+    updateKeep();
 }
 
-void PlotPanel::applySelection() {
-    // Drop the charts that are no longer selected, add the newly selected ones (filled from the
-    // recorded history so the curve starts at the beginning, not at the click).
-    for (auto it = charts_.begin(); it != charts_.end();) {
-        if (selected_.count(it->first)) { ++it; continue; }
-        row_->removeWidget(it->second);
-        it->second->deleteLater();
-        it = charts_.erase(it);
-    }
-    for (const std::string& name : selected_) {
-        if (std::any_of(charts_.begin(), charts_.end(), [&](auto& c) { return c.first == name; })) continue;
-        auto* c = new TimeSeriesChart(QString::fromStdString(name), nextColor());
-        row_->addWidget(c, 1);
-        charts_.emplace_back(name, c);
-        fillFromHistory(c, name);
-    }
-    showHint();
-    channelBtn_->setText(QString("Каналы (%1 из %2)").arg(selected_.size()).arg(menuNames_.size()));
-}
-
-// The words instead of charts, never a dead area: nothing recorded yet - how to start; recorded but
-// no quantity chosen - how to choose one; charts on screen - no words.
-void PlotPanel::showHint() {
-    if (!charts_.empty()) return placeholder_->hide();
-    placeholder_->setText(times_.empty()
-                              ? "Нажмите ▶ Пуск — графики начнут заполняться; правый щелчок по числу в Лаборатории (F8) — "
-                                "построить его график. Все величины — в меню «Каналы»."
-                              : "Выберите величину в меню «Каналы» справа внизу — или правым щелчком по числу в Лаборатории (F8).");
-    placeholder_->show();
+size_t PlotPanel::bytes() const {
+    size_t sum = 0;
+    for (const auto& [id, s] : series_) sum += s.bytes() + id.capacity();
+    return sum;
 }
 
 void PlotPanel::clear() {
-    for (auto& [name, c] : charts_) {
-        row_->removeWidget(c);
-        c->deleteLater();
-    }
-    charts_.clear();
-    times_.clear();
-    history_.clear();
+    series_.clear();
     plotNames_.clear();
-    colorsUsed_ = 0;
-    showHint();
+    frames_ = 0;
+    cursor_ = std::nan("");
+    rebuildCharts(); // the views pointed into the history that is gone
+    refreshLists();
 }
 
-bool PlotPanel::writeCsv(const QString& path) const {
+const PlotSeries* PlotPanel::series(const std::string& id) const {
+    const auto it = series_.find(id);
+    return it != series_.end() ? &it->second : nullptr;
+}
+
+// --- The selected object --------------------------------------------------------------------------
+
+void PlotPanel::showObject(const QString& label) {
+    if (label == object_) return;
+    object_ = label;
+    charts_.erase(std::remove_if(charts_.begin(), charts_.end(), [](const Chart& c) { return c.object; }), charts_.end());
+    if (!label.isEmpty())
+        for (const Chart& c : objectCharts(label)) charts_.push_back(c);
+    updateKeep();
+    forgetColours();
+    rebuildCharts();
+    QTimer::singleShot(0, this, &PlotPanel::refreshLists);
+}
+
+QString PlotPanel::objectTitle() const { return object_.isEmpty() ? QString() : "Объект: " + object_; }
+
+// --- What the reader may change -------------------------------------------------------------------
+
+// After any change the reader made: the history's bounds, the views, and the lists a moment later
+// (the click may have come from one of them).
+void PlotPanel::chartsChanged() {
+    touched_ = true;
+    updateKeep();
+    forgetColours();
+    rebuildCharts();
+    QTimer::singleShot(0, this, &PlotPanel::refreshLists);
+}
+
+// The lines no longer on any chart give their colours back, so the lines on screen keep the first,
+// best-told-apart colours of the palette (the scene's energy keeps its three for good).
+void PlotPanel::forgetColours() {
+    std::vector<std::string> onScreen;
+    for (const Chart& c : charts_) onScreen.insert(onScreen.end(), c.ids.begin(), c.ids.end());
+    catalog_.releaseAllBut(onScreen);
+}
+
+bool PlotPanel::showsChannel(const std::string& id) const {
+    return std::any_of(charts_.begin(), charts_.end(), [&](const Chart& c) { return contains(c.ids, id); });
+}
+
+// A line on the first chart of its unit (never on the object's), else on a chart of its own.
+void PlotPanel::showChannel(const std::string& id) {
+    if (showsChannel(id)) return;
+    const QString unit = catalog_.card(id).unit;
+    for (Chart& c : charts_)
+        if (!c.object && !c.ids.empty() && unitOf(c) == unit) {
+            c.ids.push_back(id);
+            c.title.clear();
+            return chartsChanged();
+        }
+    charts_.insert(std::find_if(charts_.begin(), charts_.end(), [](const Chart& c) { return c.object; }), Chart{{}, {id}, {}, false});
+    chartsChanged();
+}
+
+// The checklist: on - onto a chart (showChannel); off - off every chart, an emptied chart goes too.
+void PlotPanel::setChannelShown(const std::string& id, bool on) {
+    if (on) return showChannel(id);
+    for (Chart& c : charts_) {
+        if (contains(c.ids, id)) c.title.clear();
+        eraseId(c.ids, id);
+        c.hidden.erase(id);
+    }
+    charts_.erase(std::remove_if(charts_.begin(), charts_.end(), [](const Chart& c) { return c.ids.empty(); }), charts_.end());
+    chartsChanged();
+}
+
+// The checklist's presets:
+//   «Энергия»  - the scene's energy chart, back in front if it was taken away;
+//   «Движок»   - a chart of the step's time and its five longest stages right now;
+//   «Сбросить» - the charts as they come by themselves: the energy, and the object's if one is selected.
+void PlotPanel::applyPreset(const QString& name) {
+    if (name == "Энергия") {
+        if (!std::any_of(charts_.begin(), charts_.end(), [](const Chart& c) { return c.ids == defaultChannels(); }))
+            charts_.insert(charts_.begin(), defaultCharts().front());
+    } else if (name == "Движок") {
+        std::vector<std::pair<double, std::string>> stages;
+        for (const auto& [id, s] : series_) {
+            const PlotChannel card = catalog_.card(id);
+            if (id != "frame/step ms" && card.group == PlotGroup::Engine && card.unit == "мс" && std::isfinite(s.latest()))
+                stages.push_back({s.latest(), id});
+        }
+        std::sort(stages.rbegin(), stages.rend()); // the longest first
+        Chart engine{"Время шага физики по стадиям, мс", {"frame/step ms"}, {}, false};
+        for (size_t i = 0; i < stages.size() && i < 5; ++i) engine.ids.push_back(stages[i].second);
+        charts_.insert(std::find_if(charts_.begin(), charts_.end(), [](const Chart& c) { return c.object; }), engine);
+    } else if (name == "Сбросить") {
+        charts_ = defaultCharts();
+        if (!object_.isEmpty())
+            for (const Chart& c : objectCharts(object_)) charts_.push_back(c);
+    }
+    chartsChanged();
+    touched_ = name != "Сбросить";
+}
+
+// The «+»: an empty chart after the scene's charts, its list open at once.
+void PlotPanel::addChart() {
+    const auto at = std::find_if(charts_.begin(), charts_.end(), [](const Chart& c) { return c.object; });
+    const int chart = int(at - charts_.begin());
+    charts_.insert(at, Chart{});
+    chartsChanged();
+    openChartList(chart);
+}
+
+void PlotPanel::openChartList(int chart) {
+    if (chart < 0 || chart >= int(charts_.size())) return;
+    listChart_ = chart;
+    chartList_->setRows(rowsFor(chart));
+    TrackChart* view = viewOf(chart);
+    if (view) chartList_->popupAt(view, view->titleRect().toRect());
+    else chartList_->popupAt(this, QRect(0, 0, width(), 0));
+}
+
+// The list's click on a row: this quantity alone on the chart.
+void PlotPanel::switchChart(int chart, const std::string& id) {
+    if (chart < 0 || chart >= int(charts_.size())) return;
+    charts_[size_t(chart)].ids = {id};
+    charts_[size_t(chart)].hidden.clear();
+    charts_[size_t(chart)].title.clear();
+    chartsChanged();
+}
+
+// The list's ＋ / ✓: one more line on this chart - or, of another unit, on a new chart right after it
+// (never two y-axes) - or one line fewer.
+void PlotPanel::setOnChart(int chart, const std::string& id, bool on) {
+    if (chart < 0 || chart >= int(charts_.size())) return;
+    Chart& c = charts_[size_t(chart)];
+    if (!on) {
+        eraseId(c.ids, id);
+        c.hidden.erase(id);
+        c.title.clear();
+    } else if (!c.ids.empty() && unitOf(c) != catalog_.card(id).unit) {
+        charts_.insert(charts_.begin() + chart + 1, Chart{{}, {id}, {}, c.object});
+    } else if (!contains(c.ids, id)) {
+        c.ids.push_back(id);
+        c.title.clear();
+    }
+    chartsChanged();
+    QTimer::singleShot(0, this, [this] {
+        if (chartList_->isVisible()) chartList_->setRows(rowsFor(listChart_)); // the ＋ becomes ✓
+    });
+}
+
+// A click on a legend entry: that line hidden or shown again (-1: on every chart that has it).
+void PlotPanel::toggleLine(int chart, const std::string& id) {
+    for (int i = 0; i < int(charts_.size()); ++i) {
+        if ((chart >= 0 && i != chart) || !contains(charts_[size_t(i)].ids, id)) continue;
+        std::set<std::string>& hidden = charts_[size_t(i)].hidden;
+        if (!hidden.erase(id)) hidden.insert(id);
+    }
+    chartsChanged();
+}
+
+// A double click: that line alone; when it is alone already, every line again.
+void PlotPanel::isolateLine(int chart, const std::string& id) {
+    for (int i = 0; i < int(charts_.size()); ++i) {
+        Chart& c = charts_[size_t(i)];
+        if ((chart >= 0 && i != chart) || !contains(c.ids, id)) continue;
+        const bool alone = std::all_of(c.ids.begin(), c.ids.end(), [&](const std::string& o) { return o == id || c.hidden.count(o); });
+        c.hidden.clear();
+        if (!alone)
+            for (const std::string& o : c.ids)
+                if (o != id) c.hidden.insert(o);
+    }
+    chartsChanged();
+}
+
+void PlotPanel::removeChart(int chart) {
+    if (chart < 0 || chart >= int(charts_.size())) return;
+    charts_.erase(charts_.begin() + chart);
+    chartsChanged();
+}
+
+// The right click on a chart: what may be done to it, to its lines, to the layout, to the picture.
+QMenu* PlotPanel::contextMenu(TrackChart* view, const QPoint& at) {
+    const int chart = chartOf(view);
+    auto* menu = new QMenu(this);
+    menu->setAttribute(Qt::WA_DeleteOnClose);
+    auto item = [&](const char* name, const QString& text, std::function<void()> act) {
+        QAction* a = menu->addAction(text);
+        a->setObjectName(name);
+        connect(a, &QAction::triggered, this, act);
+        return a;
+    };
+    item("plotMenuAdd", "Добавить величину…", [this, chart] {
+        if (chart >= 0) return openChartList(chart);
+        checklist_->setRows(rowsFor(-1));
+        checklist_->popupAt(more_, more_->rect());
+    });
+    const int k = view->nearestTrack(at);
+    const std::string line = k >= 0 ? view->tracks()[size_t(k)].id : std::string();
+    item("plotMenuRemoveLine", k >= 0 ? "Убрать линию «" + view->tracks()[size_t(k)].name + "»" : QString("Убрать линию"),
+         [this, chart, line] { chart >= 0 ? setOnChart(chart, line, false) : setChannelShown(line, false); })
+        ->setEnabled(k >= 0);
+    item("plotMenuRemoveChart", "Убрать этот график", [this, chart] { removeChart(chart); })->setEnabled(chart >= 0);
+    menu->addSeparator();
+    auto* layouts = new QActionGroup(menu);
+    const std::pair<const char*, const char*> choices[] = {{"plotMenuOverlay", "Наложить"}, {"plotMenuLanes", "Дорожками"},
+                                                           {"plotMenuNormalized", "Нормировать"}};
+    for (int i = 0; i < 3; ++i) {
+        QAction* a = item(choices[i].first, choices[i].second, [this, i] { setArrangement(Arrangement(i)); });
+        a->setCheckable(true);
+        a->setChecked(int(arrangement_) == i);
+        layouts->addAction(a);
+    }
+    QAction* whole = item("plotMenuWhole", "Весь прогон, а не последняя минута", [this] { setWholeRun(!wholeRun_); });
+    whole->setCheckable(true);
+    whole->setChecked(wholeRun_);
+    menu->addSeparator();
+    item("plotMenuCsv", "Сохранить CSV…", [this] { emit saveCsvRequested(); });
+    item("plotMenuCopy", "Скопировать картинку", [view] { QApplication::clipboard()->setImage(view->grab().toImage()); });
+    const double t = view->timeAtX(at.x());
+    item("plotMenuLab", "Показать этот момент в Лаборатории", [this, t] { emit timeClicked(t); })->setEnabled(frames_ > 0);
+    return menu;
+}
+
+// --- The lists ------------------------------------------------------------------------------------
+
+// The rows of a list: every recorded quantity and every one on a chart (an object's may not be
+// measured yet), each with its card, whether it is on this chart (chart ≥ 0) or anywhere (-1), its
+// colour when drawn and its latest value.
+std::vector<ChannelList::Row> PlotPanel::rowsFor(int chart) {
+    std::set<std::string> ids;
+    for (const auto& [id, s] : series_) ids.insert(id);
+    for (const Chart& c : charts_) ids.insert(c.ids.begin(), c.ids.end());
+    std::vector<ChannelList::Row> rows;
+    for (const std::string& id : ids) {
+        ChannelList::Row r;
+        r.channel = catalog_.card(id);
+        r.on = chart >= 0 && chart < int(charts_.size()) ? contains(charts_[size_t(chart)].ids, id) : showsChannel(id);
+        if (showsChannel(id)) r.color = catalog_.color(id), r.style = catalog_.lineStyle(id);
+        const PlotSeries* s = series(id);
+        r.value = s ? formatValue(s->latest()) : "—";
+        rows.push_back(r);
+    }
+    return rows;
+}
+
+void PlotPanel::refreshLists() {
+    if (checklist_->isVisible()) checklist_->setRows(rowsFor(-1));
+    if (chartList_->isVisible()) chartList_->setRows(rowsFor(listChart_));
+}
+
+// --- The charts on screen -------------------------------------------------------------------------
+
+QString PlotPanel::unitOf(const Chart& c) { return c.ids.empty() ? QString() : catalog_.card(c.ids.front()).unit; }
+
+// A chart's title in words: its fixed words, else its line's name and unit, else the first line's
+// name, how many more, and their unit.
+QString PlotPanel::titleOf(const Chart& c) {
+    if (!c.title.isEmpty()) return c.title;
+    if (c.ids.empty()) return "Выберите величину";
+    const PlotChannel first = catalog_.card(c.ids.front());
+    const QString unit = first.unit.isEmpty() ? QString() : ", " + first.unit;
+    if (c.ids.size() == 1) return first.name + unit;
+    return QString("%1 и ещё %2%3").arg(first.name).arg(c.ids.size() - 1).arg(unit);
+}
+
+PlotTrack PlotPanel::trackOf(const std::string& id, bool hidden) {
+    const PlotChannel card = catalog_.card(id);
+    return {id, card.name, card.unit, catalog_.color(id), catalog_.lineStyle(id), series(id), hidden};
+}
+
+int PlotPanel::chartOf(const TrackChart* view) const {
+    for (size_t i = 0; i < views_.size(); ++i)
+        if (views_[i] == view) return viewChart_[i];
+    return -1;
+}
+
+TrackChart* PlotPanel::viewOf(int chart) const {
+    for (size_t i = 0; i < views_.size(); ++i)
+        if (viewChart_[i] == chart) return views_[i];
+    return nullptr;
+}
+
+// A chart's view and what it answers: the hover, a click (the Laboratory), the title's ▾, the
+// legend, the right click. chart -1: the normalised chart of every line.
+TrackChart* PlotPanel::makeView(int chart) {
+    auto* v = new TrackChart;
+    v->setObjectName("trackChart");
+    v->setNormalized(chart < 0);
+    v->setCursorTime(cursor_);
+    connect(v, &TrackChart::hovered, this, [this, v](double t, QPoint at, int track) { onHover(v, t, at, track); });
+    connect(v, &TrackChart::hoverLeft, this, &PlotPanel::onHoverLeft);
+    connect(v, &TrackChart::clicked, this, &PlotPanel::timeClicked);
+    connect(v, &TrackChart::titleClicked, this, [this, chart] { openChartList(chart); });
+    connect(v, &TrackChart::legendClicked, this, [this, v, chart](int k) { toggleLine(chart, v->tracks()[size_t(k)].id); });
+    connect(v, &TrackChart::legendDoubleClicked, this, [this, v, chart](int k) { isolateLine(chart, v->tracks()[size_t(k)].id); });
+    connect(v, &TrackChart::menuRequested, this, [this, v](QPoint at) { contextMenu(v, at)->popup(v->mapToGlobal(at)); });
+    views_.push_back(v);
+    viewChart_.push_back(chart);
+    return v;
+}
+
+// The charts again, for the charts and the layout:
+//   Наложить    - the scene's charts side by side (three to a row), the object's beside them;
+//   Дорожками   - every chart under the one before, one set of margins so the time axes line up, the
+//                 time labelled under the lowest lane only;
+//   Нормировать - one chart of every line, each 0 … 1.
+// With an object selected, each part has a quiet header: «Сцена», «Объект: Куб 1».
+void PlotPanel::rebuildCharts() {
+    if (QWidget* old = scroll_->takeWidget()) old->deleteLater();
+    views_.clear();
+    viewChart_.clear();
+    auto* host = new QWidget;
+    host->setObjectName("plotHost");
+    const bool lanes = arrangement_ == Arrangement::Lanes;
+    QBoxLayout* box = lanes ? static_cast<QBoxLayout*>(new QVBoxLayout(host)) : new QHBoxLayout(host);
+    box->setContentsMargins(0, 0, 0, 0);
+    box->setSpacing(lanes ? 6 : 12);
+    if (arrangement_ == Arrangement::Normalized) {
+        box->addWidget(normalizedView(), 1);
+    } else {
+        std::vector<int> scene, object;
+        for (int i = 0; i < int(charts_.size()); ++i) (charts_[size_t(i)].object ? object : scene).push_back(i);
+        const bool headers = !object.empty();
+        box->addWidget(section(headers ? QString("Сцена") : QString(), scene, true), std::max(1, int(scene.size())));
+        if (!object.empty()) box->addWidget(section(objectTitle(), object, false), int(object.size()));
+    }
+    scroll_->setWidget(host);
+    refreshCharts();
+    showHint();
+    if (lanes) emit roomWanted(host->minimumSizeHint().height() + 64); // the lanes and the bar under them
+}
+
+// Every line of every chart, each once, on one chart - each scaled to 0 … 1.
+TrackChart* PlotPanel::normalizedView() {
+    std::vector<PlotTrack> tracks;
+    std::set<std::string> seen;
+    for (const Chart& c : charts_)
+        for (const std::string& id : c.ids)
+            if (seen.insert(id).second) tracks.push_back(trackOf(id, c.hidden.count(id) > 0));
+    TrackChart* v = makeView(-1);
+    v->setTitle("Все линии от 0 до 1 — форма, не величина", false);
+    v->setEmptyText("Нет ни одной линии: щёлкните правой кнопкой — «Добавить величину…»");
+    v->setTracks(tracks);
+    return v;
+}
+
+// A part of the charts: its header (when there are two parts), its charts - side by side, three to a
+// row, or as lanes one under another - and, in the scene's part, the quiet «+» for one more chart.
+QWidget* PlotPanel::section(const QString& header, const std::vector<int>& charts, bool plus) {
+    auto* w = new QWidget;
+    auto* col = new QVBoxLayout(w);
+    col->setContentsMargins(0, 0, 0, 0);
+    col->setSpacing(3);
+    if (!header.isEmpty()) {
+        auto* title = new QLabel(header);
+        title->setObjectName("plotSection");
+        title->setStyleSheet("color: #8fc1ff; font-weight: 600; padding-left: 4px;");
+        col->addWidget(title);
+    }
+    auto* grid = new QGridLayout;
+    grid->setSpacing(6);
+    const bool lanes = arrangement_ == Arrangement::Lanes;
+    const int columns = lanes ? 1 : std::clamp(int(charts.size()), 1, 3);
+    for (size_t i = 0; i < charts.size(); ++i) {
+        const Chart& c = charts_[size_t(charts[i])];
+        std::vector<PlotTrack> tracks;
+        for (const std::string& id : c.ids) tracks.push_back(trackOf(id, c.hidden.count(id) > 0));
+        TrackChart* v = makeView(charts[i]);
+        v->setTitle(titleOf(c));
+        v->setEmptyText(c.ids.empty() ? "Щёлкните ▾ у заголовка и выберите, что рисовать"
+                                      : "Ждём первых чисел — они приходят, пока сцена идёт");
+        v->setTracks(tracks);
+        if (lanes) v->setMinimumHeight(96);
+        grid->addWidget(v, int(i) / columns, int(i) % columns);
+    }
+    if (plus) {
+        auto* add = new QToolButton;
+        add->setObjectName("plotAddChart");
+        add->setText("+");
+        add->setToolTip("Ещё один график: выбрать, что на нём");
+        add->setStyleSheet("QToolButton { color: #8b93a2; border: 1px dashed #3a3f48; border-radius: 6px; background: transparent; font-size: 17px; }"
+                           "QToolButton:hover { color: white; border-color: #4096ff; }");
+        connect(add, &QToolButton::clicked, this, &PlotPanel::addChart);
+        const int rows = std::max(1, (int(charts.size()) + columns - 1) / columns);
+        add->setSizePolicy(lanes ? QSizePolicy::Expanding : QSizePolicy::Fixed, lanes ? QSizePolicy::Fixed : QSizePolicy::Expanding);
+        if (lanes) add->setFixedHeight(20), grid->addWidget(add, rows, 0);
+        else add->setFixedWidth(22), grid->addWidget(add, 0, columns, rows, 1);
+    }
+    col->addLayout(grid, 1);
+    return w;
+}
+
+// The span of time on the charts: the whole run while it is short (or when asked for), else the
+// last minute, sliding with the run.
+std::pair<double, double> PlotPanel::timeWindow() const {
+    if (frames_ == 0) return {0.0, 1.0};
+    const double from = wholeRun_ || now_ - start_ <= kLiveSeconds ? start_ : now_ - kLiveSeconds;
+    return {from, std::max(now_, from + 1e-3)};
+}
+
+// The lanes share their margins, so that one moment is one x on every lane; the lowest one labels the time.
+void PlotPanel::alignLanes() {
+    int left = 0, right = 0;
+    for (const TrackChart* v : views_) left = std::max(left, v->neededLeftMargin()), right = std::max(right, v->neededRightMargin());
+    for (size_t i = 0; i < views_.size(); ++i) {
+        views_[i]->setSharedMargins(left, right);
+        views_[i]->setTimeAxisVisible(i + 1 == views_.size());
+    }
+}
+
+// At most every 40 ms, while frames come: the window slides, every chart takes its new samples, the
+// lanes line up again, an open list shows fresh values.
+void PlotPanel::refreshCharts() {
+    const auto [t0, t1] = timeWindow();
+    for (TrackChart* v : views_) {
+        v->setWindow(t0, t1);
+        v->refresh();
+    }
+    if (arrangement_ == Arrangement::Lanes) alignLanes();
+    if (!checklist_->isVisible() && !chartList_->isVisible()) return;
+    std::map<std::string, QString> values;
+    for (const auto& [id, s] : series_) values[id] = formatValue(s.latest());
+    checklist_->updateValues(values);
+    chartList_->updateValues(values);
+}
+
+// Before the first frame: one quiet line instead of the charts - nothing to press, nothing to choose.
+void PlotPanel::showHint() {
+    scroll_->setVisible(frames_ > 0);
+    placeholder_->setVisible(frames_ == 0);
+}
+
+// --- The cursor and the hover ---------------------------------------------------------------------
+
+void PlotPanel::setCursorTime(double t) {
+    cursor_ = t;
+    for (TrackChart* v : views_) v->setCursorTime(t);
+}
+
+void PlotPanel::clearCursor() { setCursorTime(std::nan("")); }
+
+// The mouse over a chart: the dashed line and the dots on every chart, and the line under the mouse
+// in words.
+void PlotPanel::onHover(TrackChart* view, double t, QPoint globalPos, int track) {
+    for (TrackChart* v : views_) v->setHoverTime(t);
+    const QString text = tooltipText(view, t, track);
+    if (text.isEmpty()) QToolTip::hideText();
+    else QToolTip::showText(globalPos + QPoint(14, 12), text, view);
+}
+
+void PlotPanel::onHoverLeft() {
+    for (TrackChart* v : views_) v->setHoverTime(std::nan(""));
+    QToolTip::hideText();
+}
+
+// «Кинетическая энергия: 1,23 Дж в 2,40 с» - the recorded value, also on the normalised chart.
+QString PlotPanel::tooltipText(const TrackChart* view, double t, int track) const {
+    if (!view || track < 0 || track >= int(view->tracks().size())) return QString();
+    const PlotTrack& line = view->tracks()[size_t(track)];
+    const double v = line.series ? line.series->valueAt(t) : std::nan("");
+    if (!std::isfinite(v)) return QString();
+    const QString value = formatValue(v) + (line.unit.isEmpty() ? QString() : " " + line.unit);
+    return QString("%1: %2 в %3 с").arg(line.name, value, QString::number(t, 'f', 2).replace('.', ','));
+}
+
+// --- The CSV --------------------------------------------------------------------------------------
+
+namespace {
+
+// Channels as a table: the time first, then a column each; a row per moment any of them was
+// recorded, an empty cell where one was not. For people («t, с», names with units, a byte-order mark
+// so that a spreadsheet reads the Russian) or for programs ("t", the channels' ids).
+bool writeTable(const QString& path, const std::vector<std::pair<QString, const PlotSeries*>>& columns, bool people) {
     QFile f(path);
-    if (!f.open(QIODevice::WriteOnly | QIODevice::Text)) return false;
-    // Columns: the scene's plots first, then every probe channel by name.
-    std::vector<std::string> columns = plotNames_;
-    for (const auto& [name, h] : history_)
-        if (std::find(columns.begin(), columns.end(), name) == columns.end()) columns.push_back(name);
+    if (columns.empty() || !f.open(QIODevice::WriteOnly | QIODevice::Text)) return false;
+    std::vector<double> times;
+    for (const auto& [head, s] : columns)
+        for (size_t i = 0; i < s->size(); ++i) times.push_back(s->time(i));
+    std::sort(times.begin(), times.end());
+    times.erase(std::unique(times.begin(), times.end()), times.end());
     QTextStream out(&f);
-    out << "t";
-    for (const std::string& name : columns) out << ",\"" << QString::fromStdString(name) << "\"";
+    out.setGenerateByteOrderMark(people);
+    auto quoted = [](QString s) { return "\"" + s.replace("\"", "\"\"") + "\""; };
+    out << (people ? quoted("t, с") : QString("t"));
+    for (const auto& [head, s] : columns) out << "," << quoted(head);
     out << "\n";
-    for (size_t i = 0; i < times_.size(); ++i) {
-        out << QString::number(times_[i], 'g', 8);
-        for (const std::string& name : columns) {
-            const auto& h = history_.at(name);
+    std::vector<size_t> at(columns.size(), 0);
+    for (double t : times) {
+        out << QString::number(t, 'g', 9);
+        for (size_t c = 0; c < columns.size(); ++c) {
+            const PlotSeries& s = *columns[c].second;
+            while (at[c] < s.size() && s.time(at[c]) < t) ++at[c];
             out << ",";
-            if (i < h.size() && std::isfinite(h[i])) out << QString::number(h[i], 'g', 8);
+            if (at[c] < s.size() && s.time(at[c]) == t && std::isfinite(s.value(at[c]))) out << QString::number(s.value(at[c]), 'g', 9);
         }
         out << "\n";
     }
     return true;
+}
+
+} // namespace
+
+// Every channel (the automation's --csv): first the energy chart's three lines, then the solvers'
+// readings, then the rest by id - a row for every simulated frame.
+bool PlotPanel::writeCsv(const QString& path) const {
+    std::vector<std::string> first = defaultChannels();
+    first.insert(first.end(), plotNames_.begin(), plotNames_.end());
+    std::vector<std::pair<QString, const PlotSeries*>> columns;
+    for (const std::string& id : first)
+        if (const PlotSeries* s = series(id)) columns.push_back({QString::fromStdString(id), s});
+    for (const auto& [id, s] : series_)
+        if (!contains(first, id)) columns.push_back({QString::fromStdString(id), &s});
+    return writeTable(path, columns, false);
+}
+
+// The lines on the charts (the shown ones, each once), headed with their names and units.
+bool PlotPanel::writeVisibleCsv(const QString& path) const {
+    std::vector<std::pair<QString, const PlotSeries*>> columns;
+    std::set<std::string> seen;
+    for (const Chart& c : charts_)
+        for (const std::string& id : c.ids) {
+            const PlotSeries* s = series(id);
+            if (!s || c.hidden.count(id) || !seen.insert(id).second) continue;
+            const PlotChannel card = catalog_.card(id);
+            columns.push_back({card.unit.isEmpty() ? card.name : card.name + ", " + card.unit, s});
+        }
+    return writeTable(path, columns, true);
 }

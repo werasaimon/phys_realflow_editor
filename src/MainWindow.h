@@ -9,6 +9,7 @@
 
 #include <QMainWindow>
 
+#include <cmath>
 #include <functional>
 #include <memory>
 #include <string>
@@ -178,7 +179,9 @@ private:
         bool live = false, alive = true, fixed = false, sleeping = false;
         int sleepIsland = -1;
         float mass = 0;
+        float height = std::nanf("");  // the centre of mass above the floor of the scene (live: the SDK's channel)
         rf::Vector3 inertia{0.0f}, pos{0.0f}, vel{0.0f}, angVel{0.0f};
+        std::string label;             // the name its channels go under («Куб» -> «Куб/height»)
     };
     void showBodyCard(int body);
     void fillBodyCard(const LabBodyFacts& f);
@@ -187,6 +190,25 @@ private:
     void updateLabTimeline();                 // shown while the Laboratory is open and the scene is not edited
     bool sceneRunning() const;
     void labPlot(const QString& channel);     // «Построить график»: the channel into the plots, the plots shown
+
+    // The plots and what ties them to the window (MainWindowPlots.cpp): what the simulation measures
+    // for them, the Laboratory's frame as their cursor, a click on them as a jump of the timeline.
+    QWidget* buildPlots(); // the charts and the bar under them, for the results dock
+    void connectPlots();
+    void updateChannelRequests();             // the scene's channels while the plots or the Laboratory are open
+    QString watchLabel(int body) const;       // the name a body's channels go under
+    void watchBody(int body);                 // this body's channels measured from the next frame on
+    void watchSelected();                     // the selected object's body, while the scene runs
+    void forgetWatched();                     // editing again or another scene: no body watched
+    void labSeekTime(double t);               // a click on a plot: the timeline to that moment
+    void saveVisibleCsv();                    // «Сохранить CSV»: the lines on the charts
+    void autoOpenPlots();                     // the first ▶: the plots open by themselves, compact
+    void recordFrames(const std::vector<SimController::Reading>& readings); // every simulated frame
+    std::string plotScene_;                   // the scene and the frame the plots recorded last
+    uint64_t plotFrame_ = 0;
+    std::vector<rf::ObjectRef> watched_;      // the bodies whose channels are measured
+    bool plotsClosedByHand_ = false;          // the reader closed the plots: ▶ leaves them closed
+    bool settingGraphs_ = false;              // setGraphsVisible at work (not the reader's hand)
 
     std::unique_ptr<SimController> ctrl_;
     Viewport* view_ = nullptr;

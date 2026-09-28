@@ -90,6 +90,7 @@ MainWindow::MainWindow() {
     buildCameraPicker();
     buildPlayExtras();
     connectViewportControls();
+    connectPlots();         // the plots with the Laboratory's timeline and the selected object
     setExpertMode(false);   // a beginner's screen: the builder and a big 3D view
     setGraphsVisible(false);
 
@@ -182,7 +183,8 @@ void MainWindow::buildMenus() {
     auto* shotAct = new QAction("Скриншот…", this);
     shotAct->setShortcut(QKeySequence("Ctrl+P"));
     connect(shotAct, &QAction::triggered, this, &MainWindow::screenshot);
-    auto* csvAct = new QAction("Экспорт графиков CSV…", this);
+    auto* csvAct = new QAction("Экспорт всех каналов CSV…", this);
+    csvAct->setToolTip("Всё, что записано за прогон, по столбцу на канал; только нарисованное — «Сохранить CSV» под графиками");
     csvAct->setShortcut(QKeySequence("Ctrl+E"));
     connect(csvAct, &QAction::triggered, this, &MainWindow::exportCsv);
     auto* loadsAct = new QAction("Экспорт нагрузок по полигонам CSV…", this);
@@ -248,6 +250,7 @@ void MainWindow::buildLayoutActions() {
     expertAct_->setToolTip("Все параметры решателей, визуализация и кисть — для тех, кто знает, что крутит");
     connect(expertAct_, &QAction::toggled, this, &MainWindow::setExpertMode);
     graphsAct_ = new QAction("Графики", this);
+    graphsAct_->setObjectName("actionGraphs");
     graphsAct_->setCheckable(true);
     graphsAct_->setShortcut(QKeySequence("F9")); // Ctrl+G is Group, as in Maya
     graphsAct_->setToolTip("Показания и графики внизу (F9); без них главные числа — в строке состояния");
@@ -268,12 +271,16 @@ void MainWindow::setExpertMode(bool on) {
     view_->setShowStats(on); // the time step and frame rate: numbers for the curious
     for (const char* name : {"paramsDock", "visDock"})
         if (auto* dock = findChild<QDockWidget*>(name)) dock->setVisible(on);
+    if (auto* tables = findChild<QWidget*>("resultsTables")) tables->setVisible(on); // the probe's raw channels
     expertAct_->setChecked(on);
 }
 
 void MainWindow::setGraphsVisible(bool on) {
+    settingGraphs_ = true;
     if (auto* dock = findChild<QDockWidget*>("resultsDock")) dock->setVisible(on);
     graphsAct_->setChecked(on);
+    settingGraphs_ = false;
+    updateChannelRequests(); // the scene's channels are measured while the plots are open
 }
 
 void MainWindow::togglePlay() {
@@ -1082,7 +1089,7 @@ void MainWindow::buildDisplayView(QVBoxLayout* col) {
 // Results dock: numbers on the left, one chart per quantity on the right
 // ---------------------------------------------------------------------------
 void MainWindow::buildResultsDock() {
-    auto* dock = new QDockWidget("Результаты", this);
+    auto* dock = new QDockWidget("Графики", this);
     dock->setObjectName("resultsDock");
 
     info_ = new QTableWidget(0, 2);
@@ -1096,21 +1103,7 @@ void MainWindow::buildResultsDock() {
     info_->setShowGrid(false);
     info_->setAlternatingRowColors(true);
 
-    plots_ = new PlotPanel;
-    auto* plotHost = new QWidget;
-    auto* pl = new QVBoxLayout(plotHost);
-    pl->setContentsMargins(0, 0, 0, 0);
-    pl->addWidget(plots_, 1);
-    auto* bar = new QHBoxLayout;
-    bar->addStretch(1);
-    auto* clr = new QPushButton("Очистить");
-    connect(clr, &QPushButton::clicked, plots_, &PlotPanel::clear);
-    auto* csv = new QPushButton("Экспорт CSV…");
-    connect(csv, &QPushButton::clicked, this, &MainWindow::exportCsv);
-    bar->addWidget(plots_->channelButton());
-    bar->addWidget(clr);
-    bar->addWidget(csv);
-    pl->addLayout(bar);
+    QWidget* plotHost = buildPlots(); // the charts and the quiet bar under them (MainWindowPlots.cpp)
 
     // The probe's channels: every quantity the engine reported this frame, by name.
     sensors_ = new QTableWidget(0, 2);
@@ -1124,7 +1117,8 @@ void MainWindow::buildResultsDock() {
     sensors_->setShowGrid(false);
     sensors_->setAlternatingRowColors(true);
     sensors_->setToolTip("Всё, что решатели сообщили отладчику rf::Probe: значения, счётчики за кадр, таймеры (мс)");
-    auto* left = new QSplitter(Qt::Vertical);
+    auto* left = new QSplitter(Qt::Vertical); // the tables: an expert's, hidden for everyone else (setExpertMode)
+    left->setObjectName("resultsTables");
     left->addWidget(info_);
     left->addWidget(sensors_);
     left->setSizes({260, 200});
@@ -1136,8 +1130,7 @@ void MainWindow::buildResultsDock() {
     split->setStretchFactor(1, 1);
     split->setSizes({340, 1000});
     dock->setWidget(split);
-    addDockWidget(Qt::BottomDockWidgetArea, dock);
-    menuBar()->findChild<QMenu*>("viewMenu")->addAction(dock->toggleViewAction());
+    addDockWidget(Qt::BottomDockWidgetArea, dock); // shown and hidden by «Графики» (F9), and by the first ▶
 }
 
 // ---------------------------------------------------------------------------
@@ -1161,6 +1154,7 @@ void MainWindow::onDisturbance(Vector3 pos, Vector3 vel) {
 // only the newest of them is drawn (on a slow screen the simulation steps several frames per paint).
 // Nothing published: nothing to do.
 void MainWindow::poll() {
+    recordFrames(ctrl_->takeReadings()); // every simulated frame into the plots
     const auto frames = ctrl_->takePublished();
     if (frames.empty()) return;
     labRecord(frames);
@@ -1231,13 +1225,7 @@ void MainWindow::onSnapshot(const std::shared_ptr<const Snap>& s) {
         updateModeVisibility(s->mode);
         for (QAction* a : samplesGroup_->actions()) a->setChecked(a->text().toStdString() == s->sceneName);
     }
-    if (sceneChanged) {
-        plots_->setScene(s->sceneName); // drops the series, restores the scene's channel selection
-        lastSceneName_ = s->sceneName;
-    } else if (s->frame < lastFrame_) {
-        plots_->clear();
-    }
-    if (s->frame != lastFrame_ && s->frame > 0) plots_->append(s->time, s->plots, s->probe);
+    lastSceneName_ = s->sceneName;
     lastFrame_ = s->frame;
 
     qint64 now = QDateTime::currentMSecsSinceEpoch();
@@ -1287,6 +1275,8 @@ void MainWindow::runAutomation(int preset, int frames, const QString& shot, cons
     auto_.frames = std::max(1, frames);
     auto_.shot = shot;
     auto_.csv = csv;
+    plots_->setKeepEverything(!csv.isEmpty()); // the CSV holds every channel for the whole run
+    updateChannelRequests();                   // ... the SDK's physical channels among them
     ctrl_->setRealtimeLimit(false);
     if (preset < 0 && auto_.editOnly) { // the authored scene as it is: no simulation
         QTimer::singleShot(900, this, [this] {

@@ -62,6 +62,8 @@ IMPORTS = {
     "gizmo-r.png": "gizmo-r-close.png",
     "lab-contacts.png": "lab-contacts.png",
     "lab-timeline.png": "lab-timeline.png",
+    "plots.png": "plots-3-cube.png",
+    "plots-menu.png": "plots-menu.png",
 }
 
 
@@ -379,6 +381,30 @@ def lab_timeline():
     save(img, "lab-timeline.png")
 
 
+def plots():
+    """The plots a second after ▶ with the cube clicked: the scene's energy, the cube's height and
+    speed, the quiet controls; the guide's table explains the numbers."""
+    left, top = 40, 690
+    img = load("plots.png").crop((left, top, 1262, 1008))
+    def at(*xy):  # screenshot pixels -> the crop's (the 1600 x 1022 window of the self-test)
+        return tuple(v - (left if i % 2 == 0 else top) for i, v in enumerate(xy))
+    callouts(img, [
+        (1, at(62, 876, 420, 962), at(96, 730)),         # the scene's energy: three lines
+        (2, at(362, 838, 382, 856), at(404, 730)),       # the ▾ after the title: this chart's list
+        (3, at(62, 857, 362, 873), at(250, 730)),        # the legend: a click hides, a double click isolates
+        (4, at(466, 817, 1250, 965), at(860, 730)),      # «Объект: Куб 1»: height and speed
+        (5, at(428, 836, 454, 965), at(530, 730)),       # the «+»: one more chart
+        (6, at(60, 976, 464, 1000), at(510, 988)),       # «Ещё величины…» and the layouts
+        (7, at(1156, 976, 1250, 1000), at(1040, 988)),   # «Сохранить CSV»
+    ])
+    save(img, "plots.png")
+
+
+def plots_menu():
+    """The right click on a chart: everything that may be done to it."""
+    save(load("plots-menu.png").crop((716, 644, 980, 892)), "plots-menu.png")
+
+
 def measure(name, top=24, bottom=104, gap=10):
     """Prints the x ranges of the things on the top bar of a screenshot (columns that differ from
     the bar's own colour), grouped where they are closer than gap pixels: the rectangles to use."""
@@ -417,7 +443,7 @@ if __name__ == "__main__":
         import_screenshots(sys.argv[2])
     pictures = (overview, first_body, object_tab, add_component, geometry_collider, playing,
                 gizmos, clone, clone_row, array, groups, multi_edit, box_select, examples,
-                laboratory, lab_timeline)
+                laboratory, lab_timeline, plots, plots_menu)
     named = [p for p in pictures if p.__name__ in sys.argv[1:]]
     for picture in named or pictures:
         picture()

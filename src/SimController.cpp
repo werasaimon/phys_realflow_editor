@@ -7,7 +7,7 @@
 
 SimController::SimController() {
     sim_ = std::make_unique<rf::Simulation>();
-    publish();
+    publish(false);
     thread_ = std::thread([this] { loop(); });
 }
 
@@ -43,16 +43,27 @@ std::shared_ptr<const rf::RenderSnapshot> SimController::snapshot() const {
     return snap_;
 }
 
-void SimController::publish() {
+void SimController::publish(bool stepped) {
     auto s = std::make_shared<rf::RenderSnapshot>();
     sim_->fillSnapshot(*s);
+    Reading r;
+    if (stepped) r = {sim_->frame(), sim_->time(), s->sceneName, s->plots, s->probe.channels, s->measurements};
     {
         std::lock_guard<std::mutex> lk(snapMtx_);
         published_.push_back(s);
         if (published_.size() > kPublishedKept) published_.pop_front();
         snap_ = std::move(s);
+        if (stepped) readings_.push_back(std::move(r));
+        if (readings_.size() > kReadingsKept) readings_.pop_front();
     }
     ++serial_;
+}
+
+std::vector<SimController::Reading> SimController::takeReadings() {
+    std::lock_guard<std::mutex> lk(snapMtx_);
+    std::vector<Reading> out(std::make_move_iterator(readings_.begin()), std::make_move_iterator(readings_.end()));
+    readings_.clear();
+    return out;
 }
 
 std::vector<std::shared_ptr<const rf::RenderSnapshot>> SimController::takePublished() {
@@ -81,7 +92,7 @@ void SimController::loop() {
 
         auto t0 = clock::now();
         if (doStep) sim_->stepFrame();
-        publish();
+        publish(doStep);
 
         // Optional real-time cap: do not run the SPH / rigid scenes faster than wall-clock.
         if (doStep && realtime_ && sim_->mode() != rf::SimMode::WindTunnel) {

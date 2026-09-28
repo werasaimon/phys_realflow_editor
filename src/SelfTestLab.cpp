@@ -141,6 +141,10 @@ void testContactCard(Checker& c, QMainWindow& w, SceneBuilder& b, Viewport* v, c
     for (int k = 0; k < 400 && (!v->snapshot() || v->snapshot()->contacts.empty()); ++k) newFrames(v, 1);
     b.pause();
     pump(250);
+    for (int k = 0; k < 60 && v->snapshot()->contacts.empty(); ++k) { // a bounce: step on to the next touch
+        b.step();
+        newFrames(v, 1);
+    }
     lookAtCube(v);
     const int i = visibleContact(v);
     if (i < 0) return c.check(false, "the landing cube has a contact point in view");

@@ -10,6 +10,7 @@
 #include <QApplication>
 #include <QCommandLineParser>
 #include <QPalette>
+#include <QScreen>
 #include <QStyleFactory>
 #include <QSettings>
 #include <QSurfaceFormat>
@@ -209,6 +210,37 @@ struct Options {
     }
 };
 
+// A run nobody watches - the self-test, the pictures, automation - never shows a window, so that
+// nobody takes it for their own editor, and never takes the keyboard from the program in front:
+//   - the main window stays on the screen, because Windows paints only what is on a screen (the 3D
+//     view draws in its paint, and some checks watch what the paint does), but it is fully
+//     transparent, has no taskbar button, is never activated and lets every click through;
+//   - any other window of it (a menu, a popup, a tooltip) that would land on a screen is moved off
+//     it before it is shown - the Show event comes before the window is put on the screen - or as
+//     soon as it moves onto one (a tooltip placed again, a popup that places itself).
+class OffscreenGuard : public QObject {
+public:
+    using QObject::QObject;
+    bool eventFilter(QObject* object, QEvent* event) override {
+        const bool shown = event->type() == QEvent::Show, moved = event->type() == QEvent::Move;
+        auto* w = qobject_cast<QWidget*>(object);
+        if ((!shown && !moved) || !w || !w->isWindow() || (moved && !w->isVisible())) return false;
+        if (w->windowOpacity() == 0.0) return false; // the invisible main window
+        for (const QScreen* screen : QGuiApplication::screens())
+            if (screen->geometry().intersects(w->frameGeometry())) {
+                w->move(w->pos() + QPoint(-20000, -20000));
+                break;
+            }
+        return false;
+    }
+};
+
+static bool unattended(const QCommandLineParser& cli, const Options& o) {
+    for (const QCommandLineOption* option : {&o.selfTest, &o.gizmoShots, &o.shot, &o.csv, &o.galleryShot, &o.thumbnail})
+        if (cli.isSet(*option)) return true;
+    return false;
+}
+
 // What the window does after it is shown: a test, pictures, automation, or the builder for a person.
 static int run(QApplication& app, MainWindow& w, const QCommandLineParser& cli, const Options& o) {
     if (cli.isSet(o.selfTest)) return runBuilderSelfTest(w, cli.value(o.shots));
@@ -255,6 +287,14 @@ int main(int argc, char** argv) {
     const QStringList wh = cli.value(o.size).split('x');
     w.resize(wh.value(0).toInt() > 0 ? wh.value(0).toInt() : 1600, wh.value(1).toInt() > 0 ? wh.value(1).toInt() : 950);
     if (cli.isSet(o.thumbnail)) w.setThumbnailMode();
+    if (unattended(cli, o)) {
+        w.setWindowFlags(w.windowFlags() | Qt::Tool | Qt::WindowTransparentForInput);
+        w.setAttribute(Qt::WA_ShowWithoutActivating);
+        w.setWindowOpacity(0.0);
+        app.installEventFilter(new OffscreenGuard(&app));
+        for (Qt::UIEffect e : {Qt::UI_AnimateTooltip, Qt::UI_FadeTooltip, Qt::UI_AnimateMenu, Qt::UI_FadeMenu, Qt::UI_AnimateCombo})
+            QApplication::setEffectEnabled(e, false); // a rolling tooltip is a window of its own, placed by Qt
+    }
     w.show();
     return run(app, w, cli, o);
 }

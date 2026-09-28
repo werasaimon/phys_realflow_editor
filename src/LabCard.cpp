@@ -77,14 +77,14 @@ void LabCard::addRow(int r, const Row& row) {
     grid_->addWidget(value, r, 1);
 }
 
-// «Построить график» of the value's channel. A number with no channel yet (one object's own numbers)
-// keeps the item, greyed, and says when it comes: never a button that silently does nothing.
+// «Построить график» of the value's channel. A number with no channel (a vector, a constant of the
+// body) keeps the item, greyed, and says where its plot is: never a button that silently does nothing.
 void LabCard::showValueMenu(QLabel* value, const std::string& channel, const QPoint& at) {
     QMenu menu(value);
     QAction* plot = menu.addAction("Построить график");
     if (channel.empty()) {
         plot->setEnabled(false);
-        menu.addAction("числа одного объекта — появится в части 2")->setEnabled(false);
+        menu.addAction("у этого числа нет канала — графики есть у |v|, |ω|, высоты, массы")->setEnabled(false);
     }
     if (menu.exec(value->mapToGlobal(at)) == plot && !channel.empty()) emit plotRequested(QString::fromStdString(channel));
 }
