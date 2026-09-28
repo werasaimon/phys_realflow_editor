@@ -137,6 +137,31 @@ static QString builderStyle() {
            "QFrame#inlineBanner QPushButton#bannerButton:hover { background: #e2b448; }";
 }
 
+// The Laboratory (LabPanel, LabCard, LabTimeline): the same dark ground, one accent blue, quiet captions.
+static QString labStyle() {
+    return "QWidget#labPanel QLabel#labIntro { color: #8b93a2; }"
+           "QWidget#labPanel QLabel#labSection { color: #8fc1ff; font-weight: 600; margin-top: 4px; }"
+           "QWidget#labPanel QLabel#labGroup { color: #aab1bd; font-weight: 600; margin-top: 8px; padding-left: 2px; }"
+           "QWidget#labPanel QPushButton#labPreset { padding: 6px 8px; border: 1px solid #3a3f48; border-radius: 8px; background: #2c3038; }"
+           "QWidget#labPanel QPushButton#labPreset:hover { background: #363c47; }"
+           "QWidget#labPanel QPushButton#labPreset:checked { background: #24466f; border: 1px solid #4096ff; }"
+           "QWidget#labPanel QCheckBox#labLayer { padding: 2px 0; }"
+           "QScrollArea#labLayerScroll { background: transparent; }"
+           "QWidget#labLayers { background: transparent; }"
+           "QFrame#labCard { border: 1px solid #3a3f48; border-radius: 8px; background: #2a2e35; }"
+           "QFrame#labCard QLabel#labCardTitle { font-size: 14px; font-weight: 600; }"
+           "QFrame#labCard QLabel#labCardSubtitle { color: #8b93a2; }"
+           "QFrame#labCard QLabel#labCardName { color: #aab1bd; }"
+           "QFrame#labCard QLabel#labCardValue { font-family: Consolas, 'Cascadia Mono', monospace; }"
+           "QFrame#labCard QPushButton#labCardButton { padding: 6px 10px; border: 1px solid #4096ff; border-radius: 6px; background: #24466f; }"
+           "QFrame#labCard QPushButton#labCardButton:hover { background: #2d5c99; }"
+           "QFrame#labTimeline { background: rgba(18, 20, 24, 200); border: 1px solid rgba(255, 255, 255, 40); border-radius: 10px; }"
+           "QFrame#labTimeline QLabel#labTimelineText { color: #b8c4d0; }"
+           "QFrame#labTimeline QToolButton#labStep { padding: 1px 7px; border-radius: 6px; font-size: 14px; color: #cfd8e3; }"
+           "QFrame#labTimeline QPushButton#labLive { padding: 4px 10px; border-radius: 6px; border: 1px solid #3a3f48; }"
+           "QFrame#labTimeline QPushButton#labLive[past=\"true\"] { background: #1f4a33; border: 1px solid #7cff9a; color: #d8ffe2; font-weight: 600; }";
+}
+
 // Software rendering for PCs without a usable GPU / OpenGL driver: Qt's Mesa llvmpipe
 // (opengl32sw.dll, an OpenGL 3.0 context) runs the same shaders on the CPU. Chosen by --software-gl or the
 // environment variable RF_SOFTWARE_GL=1; it must be decided before the application object exists.
@@ -216,7 +241,7 @@ int main(int argc, char** argv) {
     QApplication::setApplicationName("PhysRealFlow");
     QApplication::setOrganizationName("PhysRealFlow");
     applyDarkPalette(app);
-    app.setStyleSheet(windowStyle() + builderStyle());
+    app.setStyleSheet(windowStyle() + builderStyle() + labStyle());
 
     QCommandLineParser cli;
     cli.setApplicationDescription("PhysRealFlow");

@@ -110,7 +110,10 @@ public:
     // picker the scene builder gives (every object on a ray, nearest first) and drags the gizmo.
     void setEditMode(bool on);
     bool editMode() const { return editMode_; }
-    void setEditCaption(const QString& text) { editCaption_ = text; update(); } // the line under the title
+    // The line under the title. The view also says how far right that line reaches (the dynamic
+    // property "captionRight", in pixels), so what floats over the view - the play banner - can keep
+    // clear of it (ViewportPlay.cpp).
+    void setEditCaption(const QString& text);
     // While the scene plays: a coloured frame round the view (ViewportPlay.cpp; PlayOverlay.h says why).
     void setPlayFrame(bool on);
     bool playFrame() const { return playFrame_; }
@@ -156,6 +159,14 @@ public:
     // frame, because more than kMaxShadowLights were ticked.
     const std::vector<int>& lightsWithoutShadow() const { return shadowLess_; }
 
+    // The Laboratory (ViewportLab.cpp). While it is open a click - a press and a release without a
+    // drag - is reported as labClicked, besides what the click does anyway; the thing its card shows
+    // gets a ring in the view; and the words the debug layers write (Probe labels) are drawn.
+    void setLabInspect(bool on) { labInspect_ = on; }
+    bool labInspect() const { return labInspect_; }
+    void setLabMarker(bool on, const rf::Vector3& at = rf::Vector3(0.0f));
+    bool labMarkerShown() const { return labMarker_; }
+
 signals:
     // World-space point and velocity of a mouse stroke (velocity is zero on the first click).
     void disturbanceRequested(rf::Vector3 position, rf::Vector3 velocity);
@@ -183,6 +194,8 @@ signals:
     void openGLUnsupported(QString renderer);
     // The lights left without a shadow changed (indices into the snapshot's lights; empty: none).
     void shadowsLeftOut(std::vector<int> lights);
+    // The Laboratory is open and the left button was clicked here (pressed and released within 4 px).
+    void labClicked(QPointF pos);
 
 protected:
     void initializeGL() override;
@@ -273,6 +286,10 @@ private:
     void drawAxesAndHints(class QPainter& p);
     void drawPlayFrame(class QPainter& p);  // ViewportPlay.cpp
     void drawOrbitPivot(class QPainter& p);
+    void drawLabMarker(class QPainter& p);   // ViewportLab.cpp
+    void drawContactDots(class QPainter& p);
+    void drawProbeLabels(class QPainter& p);
+    static constexpr size_t kContactDotsMost = 3000; // more contacts than this: no dots
     void drawLegend(class QPainter& p, const QRect& r, float lo, float hi, const QString& label, int map);
     QMatrix4x4 viewMatrix() const { return camera_.view(); }
     QMatrix4x4 projMatrix() const { return camera_.projection(float(width()) / std::max(1, height())); }
@@ -349,6 +366,11 @@ private:
     QPointF lastMouse_;
     QString typed_; // the number typed during a keyboard transform
     bool playFrame_ = false;   // the play mode's frame round the view
+    bool labInspect_ = false;  // the Laboratory is open: clicks are reported (labClicked)
+    bool labMarker_ = false;   // the ring round what the Laboratory's card shows
+    rf::Vector3 labMarkerAt_;
+    QPointF labPress_;         // where the left button went down, to tell a click from a drag
+    bool labPressed_ = false;
     bool orbiting_ = false;    // the camera orbits: the pivot is marked
     QVector3D orbitPivot_;
     QString editCaption_ = "Правка: физика стоит. Двигайте, вращайте, масштабируйте; ▶ Пуск оживит сцену.";

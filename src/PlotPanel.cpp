@@ -31,7 +31,16 @@ const QColor kGrid(52, 56, 64);
 const QColor kAxisText(150, 157, 170);
 const QColor kInk(225, 228, 235);
 constexpr int kMaxPoints = 6000;
-const char* kDefaultChannel = "frame/step ms";
+
+// THE one place where a scene's first chart is chosen, when the scene has no plots of its own: the
+// first of these channels the engine reports wins. Physical quantities only - the frame time is an
+// engine internal and never the default. The SDK is adding «полная энергия сцены»: its channel name
+// goes to the front of this list, and nothing else has to change.
+const std::vector<std::string>& defaultChannels() {
+    static const std::vector<std::string> channels = {"rigid/kinetic energy J", "mhd/energy", "gas/max speed",
+                                                      "particles/density error %"};
+    return channels;
+}
 
 QString formatValue(double v) {
     double a = std::fabs(v);
@@ -135,10 +144,13 @@ PlotPanel::PlotPanel(QWidget* parent) : QWidget(parent) {
     row_ = new QHBoxLayout(this);
     row_->setContentsMargins(0, 0, 0, 0);
     row_->setSpacing(6);
-    placeholder_ = new QLabel("Графики появятся после запуска расчёта (Пробел). Величины — в меню «Каналы».");
+    // Never a dead area: while nothing is drawn it says how to fill it (showHint).
+    placeholder_ = new QLabel;
+    placeholder_->setWordWrap(true);
     placeholder_->setAlignment(Qt::AlignCenter);
     placeholder_->setStyleSheet("color: #8a93a3;");
     row_->addWidget(placeholder_);
+    showHint();
 
     // The chooser lives in the results dock's button bar (channelButton()); its menu lists every
     // quantity the engine has reported, checked ones are drawn.
@@ -177,20 +189,21 @@ void PlotPanel::append(double t, const std::vector<std::pair<std::string, float>
     for (const rf::Probe::Channel& c : probe.channels) record(c.name, c.value);
 
     // The menu: rebuilt when a new quantity appears. A first frame with nothing selected picks
-    // the scene's own plots, else the frame time.
+    // the scene's own plots, else the first default channel it has (defaultChannels above).
     std::vector<std::string> names;
     names.reserve(history_.size());
     for (const auto& [name, h] : history_) names.push_back(name);
     if (names != menuNames_) {
         if (selected_.empty()) {
             for (const std::string& n : plotNames_) selected_.insert(n);
-            if (selected_.empty() && history_.count(kDefaultChannel)) selected_.insert(kDefaultChannel);
+            for (const std::string& n : defaultChannels())
+                if (selected_.empty() && history_.count(n)) selected_.insert(n);
         }
         rebuildMenu(names);
         applySelection();
     }
     if (history_.empty()) return;
-    placeholder_->hide();
+    showHint();
     for (auto& [name, chart] : charts_) {
         const auto& h = history_[name];
         if (!h.empty() && h.size() == times_.size()) chart->append(t, h.back());
@@ -228,6 +241,12 @@ void PlotPanel::fillFromHistory(TimeSeriesChart* chart, const std::string& name)
         if (std::isfinite(h[i])) chart->append(times_[i], h[i]);
 }
 
+void PlotPanel::showChannel(const std::string& name) {
+    selected_.insert(name);
+    rebuildMenu(menuNames_); // the menu's tick follows
+    applySelection();
+}
+
 void PlotPanel::applySelection() {
     // Drop the charts that are no longer selected, add the newly selected ones (filled from the
     // recorded history so the curve starts at the beginning, not at the click).
@@ -244,8 +263,19 @@ void PlotPanel::applySelection() {
         charts_.emplace_back(name, c);
         fillFromHistory(c, name);
     }
-    placeholder_->setVisible(charts_.empty());
+    showHint();
     channelBtn_->setText(QString("Каналы (%1 из %2)").arg(selected_.size()).arg(menuNames_.size()));
+}
+
+// The words instead of charts, never a dead area: nothing recorded yet - how to start; recorded but
+// no quantity chosen - how to choose one; charts on screen - no words.
+void PlotPanel::showHint() {
+    if (!charts_.empty()) return placeholder_->hide();
+    placeholder_->setText(times_.empty()
+                              ? "Нажмите ▶ Пуск — графики начнут заполняться; правый щелчок по числу в Лаборатории (F8) — "
+                                "построить его график. Все величины — в меню «Каналы»."
+                              : "Выберите величину в меню «Каналы» справа внизу — или правым щелчком по числу в Лаборатории (F8).");
+    placeholder_->show();
 }
 
 void PlotPanel::clear() {
@@ -258,7 +288,7 @@ void PlotPanel::clear() {
     history_.clear();
     plotNames_.clear();
     colorsUsed_ = 0;
-    placeholder_->show();
+    showHint();
 }
 
 bool PlotPanel::writeCsv(const QString& path) const {

@@ -100,6 +100,7 @@ void Viewport::mousePressEvent(QMouseEvent* e) {
     setFocus(Qt::MouseFocusReason); // the keys (W A S D, X Y Z during a drag) come here
     if (navPress(e)) return;
     if (e->button() == Qt::RightButton) rightHeld_ = true;
+    if (e->button() == Qt::LeftButton) labPress_ = e->position(), labPressed_ = true; // a Laboratory click?
     const bool alt = e->modifiers() & Qt::AltModifier;
     if (!editMode_ && !grabbed_ && e->button() == Qt::LeftButton && !alt && !(e->modifiers() & Qt::ShiftModifier)) {
         int body;
@@ -141,6 +142,10 @@ void Viewport::mouseReleaseEvent(QMouseEvent* e) {
     if (grabbed_) grabbed_->release(*this, e);
     if (e->button() == Qt::RightButton) stopFlying();
     if (e->buttons() == Qt::NoButton) grabbed_ = nullptr;
+    if (e->button() == Qt::LeftButton && labPressed_) { // a press and a release within 4 px: a click
+        labPressed_ = false;
+        if (labInspect_ && QLineF(labPress_, e->position()).length() < 4) emit labClicked(e->position());
+    }
     update();
     updateHint();
 }

@@ -80,6 +80,7 @@ MainWindow::MainWindow() {
     buildSceneBuilderDock();
     connectSceneBuilder();
     buildLayoutActions();
+    buildLaboratory(); // before the top bar: its button «Лаборатория» sits there
     buildMainToolbar();
     buildToolShelf();
     buildSceneMenu();
@@ -301,6 +302,7 @@ void MainWindow::onModeChanged() {
     localAct_->setEnabled(gizmo);
     status_->setText(modeText());
     updatePlayOverlay();
+    updateLabTimeline(); // the Laboratory's strip: not while the scene is edited
 }
 
 // The right click of the edit mode, as the quad menu of 3ds Max: an object under the cursor that is
@@ -1155,11 +1157,14 @@ void MainWindow::onDisturbance(Vector3 pos, Vector3 vel) {
     if (!ctrl_->isRunning()) ctrl_->requestStep(); // make the effect visible even when paused
 }
 
+// Every frame the simulation published since the last look goes into the Laboratory's recording;
+// only the newest of them is drawn (on a slow screen the simulation steps several frames per paint).
+// Nothing published: nothing to do.
 void MainWindow::poll() {
-    uint64_t serial = ctrl_->serial();
-    if (serial == lastSerial_) return;
-    lastSerial_ = serial;
-    if (auto s = ctrl_->snapshot()) onSnapshot(s);
+    const auto frames = ctrl_->takePublished();
+    if (frames.empty()) return;
+    labRecord(frames);
+    onSnapshot(frames.back());
 }
 
 void MainWindow::updateModeVisibility(SimMode m) {
@@ -1216,7 +1221,7 @@ void MainWindow::onSnapshot(const std::shared_ptr<const Snap>& s) {
     builder_->onSimulationSnapshot(*s);
     // A ready-made scene is framed whole again; the builder's scenes frame their objects.
     if (s->sceneName != lastSceneName_ && s->sceneName.rfind(SceneBuilder::sceneName(), 0) != 0) view_->setFocusBox(rf::AABB());
-    view_->setSnapshot(s);
+    if (labOnSnapshot()) view_->setSnapshot(s); // the Laboratory's timeline may be showing a kept frame
 
     const bool sceneChanged = s->sceneName != lastSceneName_;
     if (sceneChanged) rebuildSceneForm(*s);

@@ -26,10 +26,10 @@ qt_standard_project_setup()
 
 qt_add_executable(realflow WIN32
   src/main.cpp
-  src/MainWindow.h      src/MainWindow.cpp src/MainWindowStart.cpp src/MainWindowControls.cpp src/MainWindowToolbar.cpp src/MainWindowPlay.cpp
+  src/MainWindow.h      src/MainWindow.cpp src/MainWindowStart.cpp src/MainWindowControls.cpp src/MainWindowToolbar.cpp src/MainWindowPlay.cpp src/MainWindowLab.cpp
   src/FirstStartHint.h  src/FirstStartHint.cpp
   src/ExamplesGallery.h src/ExamplesGallery.cpp
-  src/Viewport.h        src/Viewport.cpp src/ViewportInput.cpp src/ViewportLights.cpp src/ViewportShadows.cpp src/ViewportPlay.cpp
+  src/Viewport.h        src/Viewport.cpp src/ViewportInput.cpp src/ViewportLights.cpp src/ViewportShadows.cpp src/ViewportPlay.cpp src/ViewportLab.cpp
   src/SceneMarkers.h    src/SceneMarkers.cpp
   src/NavCube.h         src/NavCube.cpp
   src/Shaders.h
@@ -46,6 +46,11 @@ qt_add_executable(realflow WIN32
   src/MeshNormals.h     src/MeshNormals.cpp
   src/PlayOverlay.h     src/PlayOverlay.cpp
   src/CameraPicker.h    src/CameraPicker.cpp
+  src/LabLayers.h       src/LabLayers.cpp
+  src/LabPanel.h        src/LabPanel.cpp
+  src/LabCard.h         src/LabCard.cpp
+  src/LabTimeline.h     src/LabTimeline.cpp
+  src/ProfilerBar.h     src/ProfilerBar.cpp
   src/CommandSearch.h   src/CommandSearch.cpp
   src/SceneBuilder.h    src/SceneBuilder.cpp  src/SceneBuilderPanels.cpp src/SceneBuilderColliders.cpp src/SceneBuilderSelection.cpp
   src/SceneBuilderObjects.cpp src/SceneBuilderClone.cpp src/SceneBuilderMulti.cpp src/SceneBuilderLights.cpp src/SceneBuilderKeep.cpp
@@ -57,7 +62,7 @@ qt_add_executable(realflow WIN32
   src/InspectorWidgets.h src/InspectorWidgets.cpp
   src/RoleBar.h         src/RoleBar.cpp
   src/Icons.h           src/Icons.cpp
-  src/SelfTest.h        src/SelfTest.cpp  src/SelfTestSupport.h src/SelfTestComponents.cpp src/SelfTestControls.cpp src/SelfTestMany.cpp src/SelfTestLights.cpp src/SelfTestShadows.cpp src/SelfTestPlay.cpp
+  src/SelfTest.h        src/SelfTest.cpp  src/SelfTestSupport.h src/SelfTestComponents.cpp src/SelfTestControls.cpp src/SelfTestMany.cpp src/SelfTestLights.cpp src/SelfTestShadows.cpp src/SelfTestPlay.cpp src/SelfTestLab.cpp
 )
 target_link_libraries(realflow PRIVATE rfcore rfsamples
   Qt6::Core Qt6::Gui Qt6::Widgets Qt6::OpenGL Qt6::OpenGLWidgets Qt6::Charts)

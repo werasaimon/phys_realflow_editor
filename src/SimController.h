@@ -1,7 +1,9 @@
 #pragma once
 // Runs the Simulation on a background thread. The GUI never touches the Simulation directly:
 // it posts commands (executed between frames on the simulation thread) and reads immutable
-// RenderSnapshots published after every frame.
+// RenderSnapshots published after every frame. The newest one is what the view draws; every one of
+// them also waits in a short queue (takePublished) so the Laboratory's recording misses no frame even
+// when the window paints slower than the simulation steps.
 
 #include "scene/Simulation.h"
 
@@ -12,6 +14,7 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 class SimController {
 public:
@@ -28,6 +31,10 @@ public:
 
     std::shared_ptr<const rf::RenderSnapshot> snapshot() const;
     uint64_t serial() const { return serial_; }
+    // Every snapshot published since the last call, oldest first (at most kPublishedKept: a window that
+    // does not ask for a long while loses the oldest, never grows without bound).
+    std::vector<std::shared_ptr<const rf::RenderSnapshot>> takePublished();
+    static constexpr size_t kPublishedKept = 240;
 
 private:
     void loop();
@@ -43,5 +50,6 @@ private:
 
     mutable std::mutex snapMtx_;
     std::shared_ptr<const rf::RenderSnapshot> snap_;
+    std::deque<std::shared_ptr<const rf::RenderSnapshot>> published_; // not yet taken (under snapMtx_)
     std::atomic<uint64_t> serial_{0};
 };

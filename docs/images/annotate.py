@@ -3,6 +3,7 @@
     python annotate.py                 redraw every picture from raw/
     python annotate.py --import DIR    first copy the screenshots from DIR into raw/
     python annotate.py --measure NAME  print where the top bar's buttons are in raw/NAME
+    python annotate.py laboratory      redraw only the pictures named (the functions below)
 
 The screenshots come from the editor itself (run.cmd --screenshot file.png --window ...; the gizmo
 close-ups from --gizmo-shots). Each picture below is one function: which screenshot, what to crop,
@@ -59,6 +60,8 @@ IMPORTS = {
     "gizmo-e.png": "gizmo-e-close.png",
     "gizmo-e-drag.png": "gizmo-e-drag-close.png",
     "gizmo-r.png": "gizmo-r-close.png",
+    "lab-contacts.png": "lab-contacts.png",
+    "lab-timeline.png": "lab-timeline.png",
 }
 
 
@@ -195,7 +198,7 @@ def overview():
         (1, (6, 28, 544, 100), (562, 128)),         # create: Куб ... Модель, Свет, Камера
         (2, (568, 28, 812, 100), (690, 132)),       # Пуск / Пауза / Стоп / Шаг
         (3, (832, 28, 986, 100), (909, 132)),       # Отменить / Повторить
-        (4, (1206, 46, 1598, 86), (1160, 64)),      # Примеры / Коллайдеры / Графики / Эксперт
+        (4, (1092, 46, 1598, 86), (1052, 64)),      # Примеры / Коллайдеры / Лаборатория / Графики / Эксперт
         (5, (6, 112, 52, 334), (92, 300)),          # tools Q W E R and Мир
         (6, (66, 116, 530, 154), (580, 176)),       # the viewport's headline and hint
         (7, (1118, 120, 1238, 240), (1085, 264)),   # the nav cube
@@ -344,6 +347,38 @@ def examples():
     save(load("examples.png"), "examples.png")
 
 
+def laboratory():
+    """The Laboratory (F8) open on a cube that has just landed, a contact point clicked: the guide's
+    table explains the numbers."""
+    img = load("lab-contacts.png")
+    callouts(img, [
+        (1, (1306, 48, 1413, 82), (1440, 120)),     # the «Лаборатория» button
+        (2, (64, 206, 392, 280), (440, 250)),       # the presets
+        (3, (64, 290, 392, 496), (440, 400)),       # the layers, each with its colours
+        (4, (66, 500, 392, 758), (440, 560)),       # the card of the clicked contact point
+        (5, (80, 714, 380, 750), (440, 700)),       # «Следить за парой»
+        (6, (64, 776, 392, 922), (440, 800)),       # the profiler: the step by stages, 5 s of history
+        (7, (712, 530, 940, 655), (1010, 520)),     # the contact dots and the ring of the clicked one
+        (8, (420, 880, 1238, 914), (600, 848)),     # the timeline strip
+    ])
+    save(img, "laboratory.png")
+
+
+def lab_timeline():
+    """The timeline strip while it shows a kept frame (the scene paused, «Вживую» lit)."""
+    left, top = 470, 380
+    img = load("lab-timeline.png").crop((left, top, 1250, 930))
+    def at(*xy):  # screenshot pixels -> the crop's
+        return tuple(v - (left if i % 2 == 0 else top) for i, v in enumerate(xy))
+    callouts(img, [
+        (1, at(506, 886, 530, 906), at(518, 836)),      # |< one frame back (>| one on)
+        (2, at(542, 886, 922, 906), at(660, 846)),      # the scrubber
+        (3, at(964, 886, 1146, 906), at(1010, 846)),    # which frame, its time, the memory
+        (4, at(1148, 883, 1230, 911), at(1196, 836)),   # «Вживую»
+    ])
+    save(img, "lab-timeline.png")
+
+
 def measure(name, top=24, bottom=104, gap=10):
     """Prints the x ranges of the things on the top bar of a screenshot (columns that differ from
     the bar's own colour), grouped where they are closer than gap pixels: the rectangles to use."""
@@ -380,6 +415,9 @@ if __name__ == "__main__":
         sys.exit(0)
     if len(sys.argv) == 3 and sys.argv[1] == "--import":
         import_screenshots(sys.argv[2])
-    for picture in (overview, first_body, object_tab, add_component, geometry_collider, playing,
-                    gizmos, clone, clone_row, array, groups, multi_edit, box_select, examples):
+    pictures = (overview, first_body, object_tab, add_component, geometry_collider, playing,
+                gizmos, clone, clone_row, array, groups, multi_edit, box_select, examples,
+                laboratory, lab_timeline)
+    named = [p for p in pictures if p.__name__ in sys.argv[1:]]
+    for picture in named or pictures:
         picture()

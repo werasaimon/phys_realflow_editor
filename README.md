@@ -51,7 +51,8 @@ src/   MainWindow (окно, большая панель «Создать», м�
        «Массив»), ClonePopover (окошко «Клонировать»), SceneBuilderLights (свет, камеры, вид через
        камеру), SceneMarkers (их каркасы и выбор мышью), ViewportLights (освещение шейдера, карта
        теней солнца), SelfTest, FluidSurfaceRenderer, PlotPanel,
-       SimController, ParamForm, OrbitCamera, ViewportTools
+       SimController, ParamForm, OrbitCamera, ViewportTools, Лаборатория (MainWindowLab, LabPanel,
+       LabLayers, LabCard, LabTimeline, ProfilerBar, ViewportLab)
 examples/              сцены конструктора: welcome (первый запуск), midas, magnets, cradle-and-cubes
 extern/phys_realflow   SDK: src/ (решатели), samples/ (сцены), tests/, docs/
 ```
@@ -148,7 +149,7 @@ extern/phys_realflow   SDK: src/ (решатели), samples/ (сцены), test
 | пуск / пауза; стоп; шаг | пробел; Esc; «.» |
 | сохранить положения из симуляции | K |
 | найти любую команду по имени | Ctrl+K |
-| графики внизу | F9 |
+| Лаборатория; графики внизу | F8; F9 |
 | размер гизмо | + / − |
 
 В схеме «Как в Blender» есть и клавиши Blender: G / R / S — двигать, вращать, масштабировать за мышью (затем X / Y / Z и набранное число: «G X 0.5 Enter» сдвигает ровно на полметра), X — удалить, Shift+D — копия.
@@ -207,6 +208,8 @@ end
 Дальше: граф ролей — роли как узлы, которые соединяются с формами (в меню он пока выключен).
 
 **Путеводитель по интерфейсу с картинками:** [docs/ui-guide.md](docs/ui-guide.md).
+
+**Лаборатория (F8)** — отладчик физики в духе PhysX PVD прямо в редакторе: слои отрисовки движка по группам с легендой цветов и быстрыми наборами, карточка точки контакта или тела по щелчку (числа с единицами, «Следить за парой» для GJK / EPA, правый щелчок — график канала), лента последних 600 кадров с точным показом любого из них и время шага физики по стадиям; подробно — [docs/ui-guide.md, раздел 12](docs/ui-guide.md#12-лаборатория-что-считает-движок).
 
 ## Лицензия
 

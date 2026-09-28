@@ -68,17 +68,29 @@ void PlayOverlay::setControlsVisible(bool on) {
     controls_->setVisible(on);
 }
 
+void PlayOverlay::setBottomInset(int px) {
+    if (bottomInset_ == px) return;
+    bottomInset_ = px;
+    place();
+}
+
 bool PlayOverlay::eventFilter(QObject* watched, QEvent* event) {
-    if (watched == view_ && event->type() == QEvent::Resize) place();
+    // A new size, or a new caption (the view's "captionRight" property): place the pieces again.
+    if (watched == view_ && (event->type() == QEvent::Resize || event->type() == QEvent::DynamicPropertyChange)) place();
     return QObject::eventFilter(watched, event);
 }
 
+// 1. The banner centred at the top - unless a narrow view (the Laboratory open beside it) would put
+//    it over the caption in the top-left corner: then one row lower, under the «Смотрю через» list.
+// 2. The big ▶ ⏸ ■ centred at the bottom, above the timeline when there is one (bottomInset_).
 void PlayOverlay::place() {
     const int w = view_->width(), h = view_->height();
     banner_->adjustSize();
-    banner_->move((w - banner_->width()) / 2, 10);
+    const int left = (w - banner_->width()) / 2;
+    const int captionRight = view_->property("captionRight").toInt();
+    banner_->move(left, left < captionRight + 12 ? 92 : 10);
     controls_->adjustSize();
-    controls_->move((w - controls_->width()) / 2, h - controls_->height() - 14);
+    controls_->move((w - controls_->width()) / 2, h - controls_->height() - 14 - bottomInset_);
     banner_->raise();
     controls_->raise();
 }

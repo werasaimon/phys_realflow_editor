@@ -1,6 +1,6 @@
 // The big bar on top of the window (see MainWindow.h): what you can create (shapes, a model, the
 // lights, a camera), then run / pause / stop / step, then undo / redo, and at the right end the text
-// buttons Примеры, Коллайдеры, Графики, Эксперт.
+// buttons Примеры, Коллайдеры, Лаборатория, Графики, Эксперт.
 //
 // A narrow window never cuts a word ("Кол...еры"): the bar gives up room step by step instead, as
 // the ribbons of Office and 3ds Max do - first the captioned buttons sit closer together, then the
@@ -75,7 +75,7 @@ void MainWindow::addCompactButtons(QToolBar* tb) {
     samplesButton->setToolTip("Все готовые сцены картинками: вода, огонь, плазма, токамак, уроки… Нажмите — откроется");
     connect(samplesButton, &QToolButton::clicked, this, &MainWindow::openGallery);
     compact(samplesButton);
-    for (QAction* a : {collidersAct_, graphsAct_, expertAct_}) {
+    for (QAction* a : {collidersAct_, labAct_, graphsAct_, expertAct_}) {
         auto* b = new QToolButton;
         b->setDefaultAction(a);
         compact(b);

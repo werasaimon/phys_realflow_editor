@@ -24,6 +24,8 @@ public:
     void setState(bool playing, bool paused, bool canKeep);
     // The big buttons off (the gallery's thumbnails, the first-minute bubble's own ▶).
     void setControlsVisible(bool on);
+    // Room kept free under the big buttons (the Laboratory's timeline strip sits there): pixels.
+    void setBottomInset(int px);
     QFrame* banner() const { return banner_; }
     QFrame* controls() const { return controls_; }
 
@@ -40,4 +42,5 @@ private:
     QLabel* bannerText_ = nullptr;
     QPushButton* keepButton_ = nullptr;
     QFrame* controls_ = nullptr;
+    int bottomInset_ = 0;
 };

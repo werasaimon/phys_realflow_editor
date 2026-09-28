@@ -656,7 +656,9 @@ void Viewport::drawBackground() {
 void Viewport::drawDebugProbe(const QMatrix4x4& vp) {
     // Whatever the solvers drew through rf::Probe this frame (contact points and normals, body
     // bounds ...). The line shader takes one colour per call, so the segments are batched by
-    // colour; a point is a small cross of three segments of its size.
+    // colour; a point is a small cross of three segments of its size. Drawn twice: faint through
+    // everything (X-ray: the half of a cross under the floor, an arrow inside a body), then solid
+    // where nothing is in front of it.
     const auto& P = snap_->probe;
     if (P.lines.empty() && P.points.empty()) return;
     std::map<std::array<int, 3>, std::vector<float>> batches; // colour (0..255) -> segments
@@ -677,8 +679,16 @@ void Viewport::drawDebugProbe(const QMatrix4x4& vp) {
             d.insert(d.end(), {p0.x, p0.y, p0.z, 0, p1.x, p1.y, p1.z, 0});
         }
     }
-    for (const auto& [c, d] : batches)
-        drawLines(d, GL_LINES, vp, QVector4D(c[0] / 255.0f, c[1] / 255.0f, c[2] / 255.0f, 1.0f), 1);
+    const bool blending = glIsEnabled(GL_BLEND), depth = glIsEnabled(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    for (const float alpha : {0.3f, 1.0f}) {
+        if (alpha < 1.0f) glDisable(GL_DEPTH_TEST);
+        else if (depth) glEnable(GL_DEPTH_TEST);
+        for (const auto& [c, d] : batches)
+            drawLines(d, GL_LINES, vp, QVector4D(c[0] / 255.0f, c[1] / 255.0f, c[2] / 255.0f, alpha), 1);
+    }
+    if (!blending) glDisable(GL_BLEND);
 }
 
 void Viewport::drawLines(const std::vector<float>& data, GLenum mode, const QMatrix4x4& vp, const QVector4D& color, float) {
@@ -1499,6 +1509,9 @@ void Viewport::drawOverlay() {
 
     drawAxesAndHints(p);
     drawOrbitPivot(p);
+    drawContactDots(p);
+    drawProbeLabels(p);
+    drawLabMarker(p);
     drawPlayFrame(p);
     p.end();
 }

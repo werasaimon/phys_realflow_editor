@@ -60,12 +60,16 @@ public:
     // All recorded quantities, one column each, one row per frame.
     bool writeCsv(const QString& path) const;
     QWidget* channelButton() const;
+    // «Построить график» from the Laboratory: this channel gets a chart (filled from its history).
+    void showChannel(const std::string& name);
+    bool showsChannel(const std::string& name) const { return selected_.count(name) > 0; }
 
 private:
     void rebuildMenu(const std::vector<std::string>& names);
     void applySelection();
     void fillFromHistory(TimeSeriesChart* chart, const std::string& name);
     QColor nextColor();
+    void showHint(); // the words where no chart is drawn: how to start, or how to choose a quantity
 
     QHBoxLayout* row_;
     QLabel* placeholder_;

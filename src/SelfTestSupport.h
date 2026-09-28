@@ -138,3 +138,6 @@ int runPlayTests(QMainWindow& w, SceneBuilder& b, Viewport* v, const QString& sh
 // Shadows by the checkbox: a spotlight's and a lamp's shadow on the floor, on and off, the budget,
 // the checkbox through undo and a saved file (SelfTestShadows.cpp).
 int runShadowTests(QMainWindow& w, SceneBuilder& b, Viewport* v, const QString& shotsDir);
+// The Laboratory: F8, the layers and presets, the card of a clicked contact or body, the timeline,
+// the profiler (SelfTestLab.cpp).
+int runLabTests(QMainWindow& w, SceneBuilder& b, Viewport* v, const QString& shotsDir);

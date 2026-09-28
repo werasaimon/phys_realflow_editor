@@ -48,9 +48,18 @@ void SimController::publish() {
     sim_->fillSnapshot(*s);
     {
         std::lock_guard<std::mutex> lk(snapMtx_);
+        published_.push_back(s);
+        if (published_.size() > kPublishedKept) published_.pop_front();
         snap_ = std::move(s);
     }
     ++serial_;
+}
+
+std::vector<std::shared_ptr<const rf::RenderSnapshot>> SimController::takePublished() {
+    std::lock_guard<std::mutex> lk(snapMtx_);
+    std::vector<std::shared_ptr<const rf::RenderSnapshot>> out(published_.begin(), published_.end());
+    published_.clear();
+    return out;
 }
 
 void SimController::loop() {

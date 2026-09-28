@@ -161,10 +161,37 @@ private:
     void appendShortcutTips();
     void connectViewportControls();
 
+    // The Laboratory (MainWindowLab.cpp): a physics debugger in the spirit of PhysX PVD - the SDK's
+    // debug layers by group, the card of a clicked contact or body, the timeline of the last frames,
+    // the live profiler. Opened by «Лаборатория» on the top bar or F8; a beginner never sees it closed.
+    void buildLaboratory();
+    void connectLaboratory();
+    void setLaboratoryVisible(bool on);
+    void labRecord(const std::vector<std::shared_ptr<const rf::RenderSnapshot>>& frames); // every published frame
+    bool labOnSnapshot(); // before a frame is drawn; false: a kept frame stays on screen
+    void onLabClicked(QPointF pos);           // a click in the view: the contact under it, else the body
+    void showContactCard(const rf::RenderSnapshot& s, int index);
+    // What the card says about a body; `live` ones come from the simulation thread, the others from the
+    // kept frame only (its pose and sleep).
+    struct LabBodyFacts {
+        int body = -1;
+        bool live = false, alive = true, fixed = false, sleeping = false;
+        int sleepIsland = -1;
+        float mass = 0;
+        rf::Vector3 inertia{0.0f}, pos{0.0f}, vel{0.0f}, angVel{0.0f};
+    };
+    void showBodyCard(int body);
+    void fillBodyCard(const LabBodyFacts& f);
+    void labScrubStarted();                   // the timeline was taken: the scene pauses
+    void labWentLive();                       // back to the newest frame: the scene runs on if it ran
+    void updateLabTimeline();                 // shown while the Laboratory is open and the scene is not edited
+    bool sceneRunning() const;
+    void labPlot(const QString& channel);     // «Построить график»: the channel into the plots, the plots shown
+
     std::unique_ptr<SimController> ctrl_;
     Viewport* view_ = nullptr;
     QTimer* timer_ = nullptr;
-    uint64_t lastSerial_ = 0, lastParamsVersion_ = 0, lastFrame_ = 0;
+    uint64_t lastParamsVersion_ = 0, lastFrame_ = 0;
     std::string lastSceneName_;
     qint64 lastInfoUpdate_ = 0;
 
@@ -206,6 +233,12 @@ private:
     class CommandSearch* search_ = nullptr;
     QAction* keepAct_ = nullptr;   // K: keep the simulation's poses after Stop
     QAction* searchAct_ = nullptr; // Ctrl+K
+    QAction* labAct_ = nullptr;    // F8: the Laboratory
+    class QDockWidget* labDock_ = nullptr;
+    class LabPanel* lab_ = nullptr;
+    class LabTimeline* timeline_ = nullptr;
+    bool labResume_ = false;       // the timeline paused a running scene: «Вживую» lets it run on
+    bool labFresh_ = false;        // new frames were recorded since the view last drew one
 
     // Mouse brush (GUI-side settings, applied through Disturbance commands)
     struct Brush {

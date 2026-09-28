@@ -3,9 +3,22 @@
 //     a running scene thinking it is the one that will be kept (docs/ui-research.md, item 1);
 //   - the orbit pivot: while the camera orbits, a ring with a dot on the point it turns around, as
 //     Maya and Blender show it (item 4) - the turn is no longer a mystery when the point is far away.
+// And one courtesy to what floats over the view: the caption line tells how far right it reaches.
 #include "Viewport.h"
 
+#include <QFontMetrics>
 #include <QPainter>
+
+// The caption under the title, and how far right it reaches. paintGL draws it at x = 14 in a
+// 9-point font; the same font measures it here. The play banner reads "captionRight" and moves
+// down a row instead of covering the words (PlayOverlay::place).
+void Viewport::setEditCaption(const QString& text) {
+    editCaption_ = text;
+    QFont small = font();
+    small.setPointSizeF(9);
+    setProperty("captionRight", 14 + QFontMetrics(small).horizontalAdvance(text));
+    update();
+}
 
 void Viewport::setPlayFrame(bool on) {
     if (playFrame_ == on) return;
