@@ -395,6 +395,16 @@ void SceneBuilder::keepComponentsConsistent(Entity& e, RoleIcon role, bool on) {
 void SceneBuilder::onObjectEdited() { applyWidgetEdit(false); }
 void SceneBuilder::onDetailsEdited() { applyWidgetEdit(true); }
 
+// A number dragged or typed merges its small steps into one undo step; a material is one click and
+// always a step of its own (merged, «Резина» right after «Мягкое» took the soft body away on undo).
+// The step is opened here; the edit's own remember(true) then falls into it.
+void SceneBuilder::onSoftPresetChosen() {
+    if (filling_ || selection_.empty()) return;
+    prepareEdit(selectedId_);
+    remember();
+    applyWidgetEdit(true);
+}
+
 void SceneBuilder::onWorldEdited() {
     if (filling_) return;
     prepareEdit(0);

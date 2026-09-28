@@ -10,6 +10,7 @@
 #include "ManyPanels.h"
 #include "ObjectInspector.h"
 #include "RoleBar.h"
+#include "SoftPanel.h"
 
 #include <QAction>
 #include <QApplication>
@@ -311,9 +312,11 @@ void SceneBuilder::buildMaterialCards(QVBoxLayout* col) {
     fixed_ = checkField(f, "неподвижное (стена, стол)");
     velocity_ = vectorField(f, "Скорость, м/с", -100, 100, 0.5, 2);
     spin_ = vectorField(f, "Вращение, рад/с", -200, 200, 0.5, 2);
-    componentCard(col, RoleIcon::Soft, f);
-    softDensity_ = numberField(f, "Плотность, кг/м³", 1, 5000, 10, 0);
-    stiffness_ = numberField(f, "Жёсткость", 0.01, 1, 0.05, 2);
+    ComponentCard* soft = componentCard(col, RoleIcon::Soft, f);
+    soft_ = new SoftPanel;
+    connect(soft_, &SoftPanel::edited, this, &SceneBuilder::onDetailsEdited);
+    connect(soft_, &SoftPanel::presetChosen, this, &SceneBuilder::onSoftPresetChosen);
+    soft->body()->addWidget(soft_);
     componentCard(col, RoleIcon::Liquid, f);
     f->addRow(new QLabel("Форма заполняется водой."));
     componentCard(col, RoleIcon::Cloth, f);
@@ -460,8 +463,7 @@ void SceneBuilder::fillDetails(const Entity& e) {
         const EntityCollider& made = cachedCollider(e);
         collider_->setAutoResult(made.shape ? collisionShapeName(made.shape->type()) : QString());
     }
-    softDensity_->setValue(e.soft.density);
-    stiffness_->setValue(e.soft.stiffness);
+    soft_->setSoft(e.soft);
     clothDensity_->setValue(e.cloth.areaDensity);
     bend_->setValue(e.cloth.bendCompliance);
     tearable_->setChecked(e.cloth.tearable);
@@ -488,8 +490,7 @@ void SceneBuilder::readDetails(Entity& e) const {
     e.rigid.velocity = velocity_->value();
     e.rigid.angularVelocity = spin_->value();
     collider_->writeTo(e.collider);
-    e.soft.density = float(softDensity_->value());
-    e.soft.stiffness = float(stiffness_->value());
+    soft_->writeTo(e.soft);
     e.cloth.areaDensity = float(clothDensity_->value());
     e.cloth.bendCompliance = float(bend_->value());
     e.cloth.tearable = tearable_->isChecked();

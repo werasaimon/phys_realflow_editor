@@ -92,7 +92,8 @@ static QString windowStyle() {
            "QLabel#galleryHint { color: #8b93a2; padding: 4px 2px 8px 2px; }";
 }
 
-// The scene builder's panels: the role tiles, the component cards, the collider buttons, the banner.
+// The scene builder's panels: the role tiles, the component cards, the collider buttons, the soft
+// materials, the banner.
 static QString builderStyle() {
     return "QWidget#builderPanel QLabel#sectionTitle { color: #8fc1ff; margin-top: 6px; }"
            "QWidget#builderPanel QLabel#headerName { font-size: 15px; font-weight: 600; }"
@@ -114,6 +115,9 @@ static QString builderStyle() {
            "QWidget#builderPanel QToolButton#colliderButton { padding: 3px; border: 1px solid #3a3f48; border-radius: 6px; background: #22262c; }"
            "QWidget#builderPanel QToolButton#colliderButton:checked { background: #1f4a33; border: 1px solid #7cff9a; }"
            "QWidget#builderPanel QLabel#colliderKindName { color: #7cff9a; }"
+           "QWidget#builderPanel QToolButton#softPreset { padding: 5px 4px; border: 1px solid #3a3f48; border-radius: 8px; background: #2c3038; }"
+           "QWidget#builderPanel QToolButton#softPreset:hover { background: #363c47; }"
+           "QWidget#builderPanel QToolButton#softPreset:checked { background: #24466f; border: 1px solid #4096ff; }"
            "QFrame#playBanner { background: rgba(58, 40, 12, 225); border: 1px solid #f0a020; border-radius: 8px; }"
            "QFrame#playBanner QLabel { color: #ffd58a; font-weight: 600; }"
            "QFrame#playBanner QPushButton#keepButton { background: #f0a020; color: #1c1810; border: none; border-radius: 6px;"

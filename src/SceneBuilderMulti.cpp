@@ -11,6 +11,7 @@
 #include "ColliderPanel.h"
 #include "InspectorWidgets.h"
 #include "ObjectInspector.h"
+#include "SoftPanel.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -66,7 +67,9 @@ void takeShape(const Entity& before, const Entity& after, Entity& t) {
     take(before.rigid.angularVelocity, after.rigid.angularVelocity, t.rigid.angularVelocity);
     takeCollider(before.collider, after.collider, t.collider);
     take(before.soft.density, after.soft.density, t.soft.density);
-    take(before.soft.stiffness, after.soft.stiffness, t.soft.stiffness);
+    take(before.soft.youngModulus, after.soft.youngModulus, t.soft.youngModulus);
+    take(before.soft.poissonRatio, after.soft.poissonRatio, t.soft.poissonRatio);
+    take(before.soft.friction, after.soft.friction, t.soft.friction);
     take(before.cloth.areaDensity, after.cloth.areaDensity, t.cloth.areaDensity);
     take(before.cloth.bendCompliance, after.cloth.bendCompliance, t.cloth.bendCompliance);
     take(before.cloth.tearable, after.cloth.tearable, t.cloth.tearable);
@@ -158,8 +161,12 @@ void SceneBuilder::markMixed() {
     markCheck(fixed_, all, [](const Entity& e) { return e.rigid.fixed; });
     markVector(velocity_, all, [](const Entity& e) { return e.rigid.velocity; });
     markVector(spin_, all, [](const Entity& e) { return e.rigid.angularVelocity; });
-    markNumber(softDensity_, all, [](const Entity& e) { return e.soft.density; });
-    markNumber(stiffness_, all, [](const Entity& e) { return e.soft.stiffness; });
+    markNumber(soft_->densityField(), all, [](const Entity& e) { return e.soft.density; });
+    markNumber(soft_->youngField(), all, [](const Entity& e) { return e.soft.youngModulus; });
+    markNumber(soft_->poissonField(), all, [](const Entity& e) { return e.soft.poissonRatio; });
+    markNumber(soft_->frictionField(), all, [](const Entity& e) { return e.soft.friction; });
+    if (std::any_of(all.begin(), all.end(), [&](const Entity& e) { return softPresetOf(e.soft) != softPresetOf(all.front().soft); }))
+        soft_->showMixedPreset(); // of different materials: no button pressed, a click makes them all one
     markNumber(clothDensity_, all, [](const Entity& e) { return e.cloth.areaDensity; });
     markNumber(bend_, all, [](const Entity& e) { return e.cloth.bendCompliance; });
     markCheck(tearable_, all, [](const Entity& e) { return e.cloth.tearable; });

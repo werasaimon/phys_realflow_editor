@@ -80,6 +80,7 @@ class QTreeWidgetItem;
 class QVBoxLayout;
 class QWidget;
 class RoleBar;
+class SoftPanel;
 class Vec3Row;
 
 class SceneBuilder : public QObject {
@@ -262,6 +263,7 @@ private:
     void keepComponentsConsistent(rf::Entity& e, RoleIcon role, bool on); // the collider goes with a rigid body
     void onObjectEdited();
     void onDetailsEdited();
+    void onSoftPresetChosen(); // a material button: one click, an undo step of its own
     void onArrayEdited();
     void onWorldEdited();
     void onListClicked(QTreeWidgetItem* item, int column);
@@ -460,7 +462,7 @@ private:
     QDoubleSpinBox *rigidDensity_ = nullptr, *friction_ = nullptr, *restitution_ = nullptr;
     QCheckBox* fixed_ = nullptr;
     Vec3Row *velocity_ = nullptr, *spin_ = nullptr;
-    QDoubleSpinBox *softDensity_ = nullptr, *stiffness_ = nullptr;
+    SoftPanel* soft_ = nullptr;    // the soft body's material: the presets, the numbers under "Подробнее"
     QDoubleSpinBox *clothDensity_ = nullptr, *bend_ = nullptr;
     QCheckBox* tearable_ = nullptr;
     QCheckBox* pinned_[5] = {};    // -x, +x, -z, +z edges and the rod (bits 1, 2, 4, 8, 16)

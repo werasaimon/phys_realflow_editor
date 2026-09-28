@@ -62,6 +62,7 @@ qt_add_executable(realflow WIN32
   src/ClonePopover.h    src/ClonePopover.cpp src/RuPlural.h
   src/ColliderGuides.h  src/ColliderGuides.cpp
   src/ColliderPanel.h   src/ColliderPanel.cpp
+  src/SoftPanel.h       src/SoftPanel.cpp
   src/ObjectInspector.h src/ObjectInspector.cpp
   src/InspectorWidgets.h src/InspectorWidgets.cpp
   src/RoleBar.h         src/RoleBar.cpp

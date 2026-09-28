@@ -1,11 +1,13 @@
 // The component tests of the self-test (see SelfTest.h): the "Объект" tab shows only what an object
 // has, "Твёрдое тело" comes with a collider, a collider alone is a fixed obstacle, the collider never
-// changes the geometry, and three clicks make a cube fall. Each check prints one line.
+// changes the geometry, a soft body's material is one click, and three clicks make a cube fall. Each
+// check prints one line.
 #include "SelfTestSupport.h"
 
 #include "ColliderGuides.h"
 #include "InspectorWidgets.h"
 #include "MainWindow.h"
+#include "SoftPanel.h"
 
 #include <QAction>
 #include <QDir>
@@ -36,6 +38,12 @@ ComponentCard* cardTitled(const SceneBuilder& b, const QString& title) {
     for (ComponentCard* card : b.inspectorPanel()->findChildren<ComponentCard*>())
         if (card->title() == title) return card;
     return nullptr;
+}
+
+// The soft body's material buttons, in their order: Желе, Резина, Мягкий пластик, Своё.
+QList<QToolButton*> softPresets(const SceneBuilder& b) {
+    ComponentCard* card = cardTitled(b, "Мягкое тело");
+    return card ? card->findChildren<QToolButton*>("softPreset") : QList<QToolButton*>();
 }
 
 // Presses the collider kind button (Авто, Коробка, Сфера, Капсула, Выпуклая оболочка, Точно).
@@ -113,6 +121,61 @@ void testAddComponentMenu(Checker& c, QMainWindow& w, SceneBuilder& b, const QSt
     pump(50);
     c.check(last(b).magnet.enabled && visibleCards(b).contains("Магнит"), "choosing «Магнит» adds its card");
     b.undoAction()->trigger();
+}
+
+// A soft cube: four materials in a row at a glance, «Желе» pressed, the numbers folded away.
+// «Резина» gives it rubber's Young's modulus at one click and stays pressed; undo takes back only
+// the material, the body stays soft.
+void testSoftPresets(Checker& c, QMainWindow& w, SceneBuilder& b) {
+    b.newScene();
+    b.createActions()[0]->trigger(); // Куб
+    clickRole(w, RoleIcon::Soft);
+    pump(100);
+    const QList<QToolButton*> presets = softPresets(b);
+    QStringList names;
+    for (QToolButton* p : presets) names << p->text();
+    auto* details = b.inspectorPanel()->findChild<CollapsibleSection*>("softDetails");
+    std::printf("  soft cube: materials %s; «Подробнее» %s\n", qPrintable(names.join(", ")),
+                details && details->isOpen() ? "open" : "folded");
+    c.check(names == QStringList({"Желе", "Резина", "Мягкий пластик", "Своё"}) && presets[0]->isVisibleTo(b.inspectorPanel()) &&
+                presets[0]->isChecked() && details && !details->isOpen(),
+            "+Мягкое: four materials in view (Желе, Резина, Мягкий пластик, Своё), «Желе» pressed, the numbers folded");
+    if (presets.size() != 4) return;
+    presets[1]->click(); // Резина
+    pump(50);
+    const SoftRole now = last(b).soft, rubber = softPreset(SoftPreset::Rubber);
+    std::printf("  «Резина»: E = %.0f Pa (rubber: %.0f Pa), ν = %.2f, %.0f kg/m³\n", double(now.youngModulus),
+                double(rubber.youngModulus), double(now.poissonRatio), double(now.density));
+    c.check(now.youngModulus == rubber.youngModulus && softPresetOf(now) == SoftPreset::Rubber && presets[1]->isChecked(),
+            "«Резина»: one click gives the body rubber's Young's modulus, and the button stays pressed");
+    b.undoAction()->trigger();
+    pump(50);
+    c.check(last(b).soft.enabled && softPresetOf(last(b).soft) == SoftPreset::Jelly && presets[0]->isChecked(),
+            "undo after «Резина»: jelly again and the body still soft (the click is an undo step of its own)");
+}
+
+// A typed Young's modulus that is no material's presses «Своё», typed back to jelly's «Желе»;
+// «Своё» itself only opens «Подробнее».
+void testSoftNumbers(Checker& c, QMainWindow& w, SceneBuilder& b, const QString& dir) {
+    const QList<QToolButton*> presets = softPresets(b);
+    auto* details = b.inspectorPanel()->findChild<CollapsibleSection*>("softDetails");
+    auto* panel = b.inspectorPanel()->findChild<SoftPanel*>();
+    if (presets.size() != 4 || !details || !panel) return c.check(false, "the soft card has its materials and «Подробнее»");
+    panel->youngField()->setValue(2.0e4); // as typed and Enter
+    pump(50);
+    const float typed = last(b).soft.youngModulus;
+    const bool custom = presets[3]->isChecked();
+    panel->youngField()->setValue(softPreset(SoftPreset::Jelly).youngModulus);
+    pump(50);
+    std::printf("  typed E = 20 000 Pa: the body has %.0f Pa, «Своё» %s; typed back: «Желе» %s\n", double(typed),
+                custom ? "pressed" : "not pressed", presets[0]->isChecked() ? "pressed" : "not pressed");
+    c.check(typed == 2.0e4f && custom && presets[0]->isChecked() && softPresetOf(last(b).soft) == SoftPreset::Jelly,
+            "a typed Young's modulus goes to the body and presses «Своё»; jelly's number presses «Желе» again");
+    presets[3]->click(); // Своё
+    pump(50);
+    c.check(details->isOpen() && softPresetOf(last(b).soft) == SoftPreset::Jelly, "«Своё» opens «Подробнее» and changes nothing");
+    if (!dir.isEmpty()) windowShot(w).save(dir + "/object-tab-soft-materials.png");
+    details->setOpen(false);
 }
 
 // A cube with a collider only hangs in the air as a fixed obstacle; a rigid ball dropped on it
@@ -287,6 +350,8 @@ int runComponentTests(QMainWindow& w, SceneBuilder& b, Viewport* v, const QStrin
     testBareObject(c, w, b, shotsDir);
     testRigidBringsCollider(c, w, b);
     testAddComponentMenu(c, w, b, shotsDir);
+    testSoftPresets(c, w, b);
+    testSoftNumbers(c, w, b, shotsDir);
     testStaticCollider(c, b, v);
     testSphereCapsule(c, w, b, v, shotsDir);
     testThreeClicks(c, w, b, v);

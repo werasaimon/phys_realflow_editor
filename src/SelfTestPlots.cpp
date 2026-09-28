@@ -373,6 +373,28 @@ double privateMegabytes() {
     return double(m.PrivateUsage) / 1048576.0;
 }
 
+// The lines on all the panel's charts together.
+size_t linesOn(const PlotPanel& panel) {
+    size_t lines = 0;
+    for (const TrackChart* view : panel.views()) lines += view->tracks().size();
+    return lines;
+}
+
+// Twelve lines on the charts, whatever channels the scene has: every seventh channel first (a spread
+// over the engine's timers and counters), then the ones in between, until the charts hold twelve
+// lines or the channels run out. Each shown channel is one more line - on the chart of its unit, or
+// on a chart of its own - so a new channel of the SDK moves the pick, not the count.
+void showTwelveLines(PlotPanel& panel, const std::vector<rf::Probe::Channel>& channels) {
+    std::vector<size_t> order;
+    for (size_t k = 0; k < channels.size(); k += 7) order.push_back(k);
+    for (size_t k = 0; k < channels.size(); ++k)
+        if (k % 7 != 0) order.push_back(k);
+    for (size_t k : order) {
+        if (linesOn(panel) >= 12) return;
+        panel.showChannel(channels[k].name);
+    }
+}
+
 // A real scene's channels (the last frame's Probe and measurements), fast-forwarded through 30
 // simulated minutes into a panel of their own with twelve lines on it: the memory after the first
 // minute and at the end, and the paint of the whole panel, averaged over the first and the last minute.
@@ -393,8 +415,7 @@ void testThirtyMinutes(Checker& c, Viewport* v) {
         for (size_t k = 0; k < probe.channels.size(); ++k) probe.channels[k].value = std::sin(t * (0.1 + 0.01 * double(k))) + 0.01 * std::sin(t * 41.0);
         for (size_t k = 0; k < measured.size(); ++k) measured[k].value = 10 + std::sin(t * (0.2 + 0.03 * double(k)));
         panel.append(t, {}, probe.channels, measured);
-        if (i == 3600 - 1) // the first minute: twelve lines on the charts from here on
-            for (size_t k = 0; k < probe.channels.size() && panel.views().size() < 6; k += 7) panel.showChannel(probe.channels[k].name);
+        if (i == 3600 - 1) showTwelveLines(panel, probe.channels); // the first minute: twelve lines from here on
         if (i % 120 != 0) continue; // a paint every 2 simulated seconds
         QElapsedTimer clock;
         clock.start();
@@ -407,8 +428,7 @@ void testThirtyMinutes(Checker& c, Viewport* v) {
     }
     lastPaint /= 30.0;
     const double memoryAtEnd = privateMegabytes();
-    size_t lines = 0;
-    for (const TrackChart* view : panel.views()) lines += view->tracks().size();
+    const size_t lines = linesOn(panel);
     std::printf("  30 simulated minutes, %zu channels, %zu lines on %zu charts: memory %.1f MB after the first minutes, %.1f MB at the end "
                 "(+%.1f MB); the history holds %.1f MB; a paint %.2f ms at the start, %.2f ms at the end\n",
                 probe.channels.size() + measured.size(), lines, panel.views().size(), memoryAtOne, memoryAtEnd,
